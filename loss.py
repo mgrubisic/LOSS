@@ -14,6 +14,7 @@ from tools.fitting import Fitting
 from tools.sat1 import SaT1
 
 
+# TODO, add loss curve, EAL, PV estimations
 class Loss:
     def __init__(self, directory=None, idaFileName=None, rsFileName=None, periodsFileName=None, slfFileName=None,
                  iml_max=5.0, iml_step=0.05, calculate_pga_values=False):
@@ -80,6 +81,7 @@ class Loss:
             ida_outputs = pickle.load(ida_file)
             ida_file.close()
 
+        # TODO, add support for other file formats
         # Reading of the RS file
         if self.rsFileName is None:
             for file in os.listdir(clientDirectory):

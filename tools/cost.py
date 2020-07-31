@@ -28,6 +28,7 @@ class Cost:
         :param epsilon: float                   Parameter of a regression expression
         :return: float                          Repair cost value
         """
+        # TODO, add support for alternative cost estimation functions, e.g. Weibull
         cost = max_cost * (epsilon * (edp ** alfa) / (beta ** alfa + edp ** alfa) + (1 - epsilon) * (edp ** gama) /
                            (delta ** gama + edp ** gama))
         return cost
@@ -76,6 +77,7 @@ class Cost:
         slf_functions = slf.provided_slf()
 
         # Repair losses
+        # TODO, add support for SLFs varying along the height
         storey_loss_ratio_weights = [1 / nstories for i in range(nstories)]
         for iml in iml_range:
             iml_test = iml
@@ -93,6 +95,7 @@ class Cost:
                 edp_beta = frag_calc['beta']
                 p_edp = stats.norm.pdf(np.log(self.idr / edp_theta) / edp_beta, loc=0, scale=1)
                 p_edp = p_edp / sum(p_edp)
+
                 # Structural drift-sensitive components
                 storey_loss_ratio_idr_sd = sum(slf_functions["E_S_IDR"](self.idr) * p_edp) * \
                                            storey_loss_ratio_weights[story - 1]
@@ -166,4 +169,4 @@ class Cost:
         # Total losses, i.e. non-collapse, non-demolition + non-collapse, demolition + collapse
         loss_results['E_LT'] = loss_results['E_NC_ND'] + 1 * loss_results['E_NC_D'] + 1 * loss_results['E_C']
 
-        return slf_functions
+        return loss_results
