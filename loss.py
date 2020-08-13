@@ -1,34 +1,31 @@
 import os
 from pathlib import Path
-import subprocess
 import numpy as np
 import pickle
-import re
-import scipy
 import pandas as pd
-from scipy import stats
-from scipy.interpolate import interp1d
-from scipy.integrate import trapz
 from tools.cost import Cost
-from tools.fitting import Fitting
 from tools.sat1 import SaT1
 
 
 # TODO, add loss curve, EAL, PV estimations
 class Loss:
     def __init__(self, directory=None, idaFileName=None, rsFileName=None, periodsFileName=None, slfFileName=None,
-                 iml_max=5.0, iml_step=0.05, calculate_pga_values=False):
+                 iml_max=5.0, iml_step=0.05, calculate_pga_values=False, include_demolition=True, slf_normalization=False, 
+                 non_directional_factor=1.0):
         """
         Initialize Loss estimation framework based on story-loss functions
         :param directory: str                           Main working directory
         :param idaFileName: str                         Incremental dynamic analysis (IDA) filename
-        :param rsFileName: str                          Response spectra (RS) file name
+        :param rsFileName: str                          Scaled Response spectra (RS) file name
         :param periodsFileName: str                     File name containing 1st mode periods of the buildings
         :param slfFileName: str                         SLF file name
         :param iml_max: float                           Max IML
         :param iml_step: float                          IML step
         :param calculate_pga_values: bool               Whether to calculate the PGA values (usually True if none
                                                         provided)
+        :param include_demolition: bool                 Whether to calculate loss contribution from demolition
+        :param slf_normalization: bool                  Whether to perform SLF normalization based on provided replacement cost or not
+        :param non_directional_factor: float            Non-directional conversion factor for components of no-directionality
         """
         # Set the main directory
         if directory is None:
@@ -54,12 +51,30 @@ class Loss:
         # Calculation of PGA values
         self.calculate_pga_values = calculate_pga_values
 
+        # Demolition contribution flag
+        self.include_demolition = include_demolition
+        
+        # SLF normalization flag
+        self.slf_normalization = slf_normalization
+        
+        # Non-directional conversion factor
+        self.non_directional_factor = non_directional_factor
+
         # Initialize number of stories
         self.nstories = None
 
     def read_input(self):
         """
         Reads the inputs for the loss assessment
+        IDA: summary_results:   IM is in [g]
+                                maxFA is in [g]
+                                maxISDR
+                                maxRISDR
+        IDA: IDA:               IM is in [g]
+                                ISDR is in [%]
+                                PFA is in [g]
+                                RISDR
+        RS is in s vs g
         :return: dict                                   Dictionary containing IDA, RS, Periods and Nstories information
         """
         # Get client directory
@@ -81,7 +96,6 @@ class Loss:
             ida_outputs = pickle.load(ida_file)
             ida_file.close()
 
-        # TODO, add support for other file formats
         # Reading of the RS file
         if self.rsFileName is None:
             for file in os.listdir(clientDirectory):
@@ -89,7 +103,7 @@ class Loss:
                     rs = pd.read_pickle(clientDirectory / file)
                     self.rsFileName = clientDirectory / file
         else:
-            rs = pd.read_pickle(self.rsFileName)
+            rs = pd.read_pickle(clientDirectory / self.rsFileName)
 
         # Get the fundamental (1st mode) periods of the buildings under consideration
         if self.periodsFileName is None:
@@ -98,7 +112,7 @@ class Loss:
                     periods = pd.read_csv(clientDirectory / file, index_col=None)
                     self.periodsFileName = clientDirectory / file
         else:
-            periods = pd.read_csv(self.periodsFileName, index_col=None)
+            periods = pd.read_csv(clientDirectory / self.periodsFileName, index_col=None)
 
         # Get number of stories of the building
         for i in ida_outputs["summary_results"]:
@@ -126,21 +140,26 @@ class Loss:
         outputs = sat1.calc_ida_PGA()
         return outputs
 
-    def calc_loses(self, ida_outputs):
+    def calc_losses(self, ida_outputs):
         """
+        SLF:                                        IDR
+                                                    PFA is in [g]
         Calculates losses based on SLFs
-        :param ida_outputs:                         IDA outputs
+        :param ida_outputs: dict                    IDA outputs
         :return: dict                               Computed, disaggregated and total losses
         """
+        # TODO, add replacement cost for SLF normalization and perform it here, rather than providing already
+        # normalized SLFs
         # Get client directory
         clientDirectory = self.directory / "client"
-
+            
         if self.slfFileName is None:
             for file in os.listdir(clientDirectory):
                 if file.startswith("slf"):
-                    cost = Cost(slf_filename=clientDirectory / file)
+                    cost = Cost(slf_filename=clientDirectory / file, include_demolition=self.include_demolition)
+            self.slfFileName = clientDirectory / file
         else:
-            cost = Cost(slf_filename=clientDirectory / self.slfFileName)
+            cost = Cost(slf_filename=clientDirectory / self.slfFileName, include_demolition=self.include_demolition)
         losses = cost.calc_losses(ida_outputs, self.iml_range, self.nstories)
         return losses
 
@@ -148,7 +167,7 @@ class Loss:
 if __name__ == "__main__":
 
     directory = Path.cwd()
-    l = Loss(calculate_pga_values=False)
+    l = Loss(calculate_pga_values=False, idaFileName="ida_case1.pickle", rsFileName="RS.pickle", 
+             periodsFileName="Periods.tcl", slfFileName="slf.xlsx", include_demolition=False)
     inputs = l.read_input()
-    a = l.calc_loses(inputs["IDA"])
-    print(a)
+    loss = l.calc_losses(inputs["IDA"])

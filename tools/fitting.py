@@ -36,18 +36,18 @@ class Fitting:
         loglik = -sum(np.log10(likelihood))
         return loglik
 
-    def calc_collapse_fragility(self, ida_results, edp_to_process="ISDR", flat_slope=.2, use_edp_max=10/100,
-                                use_beta_MDL=.2):
+    def calc_collapse_fragility(self, ida_results, edp_to_process="ISDR", flat_slope=.1, use_edp_max=10.,
+                                use_beta_MDL=.15):
         """
         Calculate a IMLvsPoE fragility for the collapse limit state
         :param ida_results: dict        IDA outputs
         :param edp_to_process: str      Type of EDP to process, e.g. ISDR
         :param flat_slope: float        Flattening slope
         :param use_edp_max: float       EDP max to use
-        :param use_beta_MDL: float      Standard deviation to use
+        :param use_beta_MDL: float      Standard deviation accounting for modelling uncertainty to use
         :return: dict                   Fitting function parameters
         """
-        # Calculate and plot limit state exceedance points on IDA
+        # Calculate and plot limit state exceedance points on IDA, edp_max in %, iml_max in g
         edp_max = max([max(ida_results['IDA'][record][edp_to_process]) for record in ida_results['IDA'] if
                        len(ida_results['IDA'][record]) != 0])
         iml_max = max([max(ida_results['IDA'][record]['IM']) for record in ida_results['IDA'] if
@@ -58,15 +58,20 @@ class Fitting:
         flats = []
         for record in ida_results['IDA']:
             if len(ida_results['IDA'][record]) != 0:
-                iml = ida_results['IDA'][record]['IM']
-                edp = ida_results['IDA'][record][edp_to_process]
-                edp = np.array(edp)
-                iml = np.array(iml)
+                # IM levels per record
+                iml = np.array(ida_results['IDA'][record]['IM'])
+                # EDP values per record
+                edp = np.array(ida_results['IDA'][record][edp_to_process])
+                
+                # Get the order of the IML
                 order = iml.argsort()
                 edp = edp[order]
                 iml = iml[order]
+                # Flatline
                 edp = np.append(edp, edp_max_mod)
                 iml = np.append(iml, iml[-1])
+                
+                # Create a spline of edp vs iml
                 spline = self.spline(edp, iml)
                 edp_news = spline['edp_spline']
                 iml_news = spline['iml_spline']
@@ -80,7 +85,7 @@ class Fitting:
                 flat_edp_lim = use_edp_max
                 if flat_edp > flat_edp_lim:
                     flat_edp = flat_edp_lim
-                    flat_iml = iml_news[np.where(edp_news == edp_news[edp_news > flat_edp_lim][0])[0]]
+                    flat_iml = float(iml_news[np.where(edp_news == edp_news[edp_news > flat_edp_lim][0])[0]])
                 exceeds.append(flat_iml)
                 flats.append((record, flat_iml))
         iml_min = min(exceeds)
@@ -104,6 +109,7 @@ class Fitting:
         theta_hat_mom = np.exp(np.mean(np.log(xs)))
         beta_hat_mom = np.std(np.log(xs))
         x0 = [theta_hat_mom, beta_hat_mom]
+        
         xopt_mle = optimize.fmin(func=lambda var: self.mlefit(theta=[var[0], var[1]], num_recs=num_recs,
                                                               num_collapse=np.array(ys[1:]), IM=xs[1:]),
                                  x0=x0, maxiter=3000, maxfun=3000, disp=False)
@@ -113,7 +119,7 @@ class Fitting:
         beta_mle = (xopt_mle[1] ** 2 + use_beta_MDL ** 2) ** 0.5
         return {'theta': theta_mle, 'beta': beta_mle, 'flats': flats}
 
-    def calc_demolition_fragility(self, ida_results, iml_range, edp_to_process="RISDR", ls_median=0.0185, ls_cov=0.3):
+    def calc_demolition_fragility(self, ida_results, iml_range, edp_to_process="RISDR", ls_median=None, ls_cov=None):
         """
         This function calculates a IMLvsPoE fragility for the demolition limit state
         :param ida_results: dict            IDA outputs
@@ -123,24 +129,37 @@ class Fitting:
         :param ls_cov: float                EDP covariance
         :return: dict                       Fitting function parameters
         """
+        if ls_median is None:
+            ls_median = 0.0185
+        if ls_cov is None:
+            ls_cov = 0.3
+            
         iml_max = max([max(ida_results['IDA'][record]['IM']) for record in ida_results['IDA'] if
                        len(ida_results['IDA'][record]) != 0])
 
+        # Update IML range if the maximum selected is lower than the actual values obtained
         if max(iml_range) <= iml_max:
             step = iml_range[1] - iml_range[0]
             iml_range = np.arange(step, iml_max + step, step)
 
         iml_news_all = iml_range
 
+        # Demolition probabilities initialization
         p_demol_final = []
         iml_demol_final = iml_news_all[iml_news_all <= iml_max]
+        # Sort the maximum IMLs obtained associated with each record
         iml_max_sorted = np.sort([max(ida_results['IDA'][record]['IM']) for record in ida_results['IDA'] if
                                   len(ida_results['IDA'][record]) != 0])
+
         iml_stop = iml_max_sorted[-3]
+        # TODO, check if vectorization may be applied instead of the for loops for the reduction of computational time
         for iml_test in iml_news_all:
+
             if iml_test <= iml_max:
+                # Stop if limit IML is reached
                 if iml_test > iml_stop:
                     iml_test = iml_stop
+                # Vector to populate if the limit state is exceeded
                 exceeds = []
                 for record in [key for key in ida_results['IDA'].keys() if len(ida_results['IDA'][key].keys()) != 0]:
                     edp = ida_results['IDA'][record][edp_to_process]
@@ -181,14 +200,17 @@ class Fitting:
                 xopt_mle = optimize.fmin(func=lambda var: self.mlefit(theta=[var[0], var[1]], num_recs=num_recs,
                                                                       num_collapse=np.array(ys), IM=xs),
                                          x0=x0, maxiter=100, maxfun=100, disp=False)
-                theta_mle = xopt_mle[0]; beta_mle = xopt_mle[1]
+                theta_mle = xopt_mle[0]
+                beta_mle = xopt_mle[1]
                 p_demol_iml = stats.norm.cdf(np.log(theta_mle/ls_median)/(beta_mle**2 + ls_cov**2)**0.5, loc=0, scale=1)
+
                 p_demol_final.append(p_demol_iml)
             else:
                 pass
         # Final fitting
         xs = iml_demol_final
         ys = [round(i, 0) for i in np.array(p_demol_final)*num_recs]
+
         theta_hat_mom = np.exp(np.mean(np.log(xs)))
         beta_hat_mom = np.std(np.log(xs))
         x0 = [theta_hat_mom, beta_hat_mom]
@@ -207,8 +229,8 @@ class Fitting:
         :param results: dict                    IDA outputs
         :param story: int                       Story level under consideration
         :param edp_to_process: str              Type of EDP under consideration
-        :param iml_test:                        IML
-        :param edp_range:                       EDP range
+        :param iml_test: float                  IML
+        :param edp_range: list                  EDP range
         :return: dict                           Mean and dispersion of the CDFs of the fragility functions derived
         """
         if edp_to_process == 'PFA':
@@ -216,10 +238,10 @@ class Fitting:
         else:
             edp_to_process_mod = edp_to_process
 
-        iml_max = max([max(results['IDA'][record]['IML']) for record in results['IDA'] if
+        iml_max = max([max(results['IDA'][record]['IM']) for record in results['IDA'] if
                        len(results['IDA'][record]) != 0])
         iml_max = max(iml_max, iml_test)
-        iml_max_sorted = np.sort([max(results['IDA'][record]['IML']) for record in results['IDA'] if
+        iml_max_sorted = np.sort([max(results['IDA'][record]['IM']) for record in results['IDA'] if
                                   len(results['IDA'][record]) != 0])
         iml_stop = iml_max_sorted[-3]
         if iml_test > iml_stop:

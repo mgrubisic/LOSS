@@ -84,3 +84,17 @@ The tool relies on three performance groups, that is
         OUTPUT: Loss results
 
 
+NOTES:
+
+Mandatory updates once single direction loss assessment is completed
+
+3. Drift sensitive losses, p_edp calculation for both directions, loop for each direction, X and Y before the story loop. If non-directional, apply non_directional_conversion_factor here
+
+4. Story_loss_ratio should include the total sum of the story (so for both directions, and for non-directional components)
+
+5. 
+
+
+-1. Finally, verify that everything works fine, that the framework is looping for all components and is not missing information
+
+
