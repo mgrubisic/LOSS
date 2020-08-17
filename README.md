@@ -83,4 +83,12 @@ The tool relies on three performance groups, that is
 
         OUTPUT: Loss results
 
+**Outputs**
+
+* Loss ratios as a function of IML (loss curves disaggregated by component performance group)
+
+* EAL
+
+
+
 

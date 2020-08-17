@@ -1,12 +1,13 @@
 import pandas as pd
 import numpy as np
 from scipy import stats
+from scipy.integrate import trapz
 from tools.fitting import Fitting
 from tools.slf import SLF
 
 
 class Cost:
-    def __init__(self, slf_filename, include_demolition, nonDirFactor=1.2):
+    def __init__(self, slf_filename=None, include_demolition=False, nonDirFactor=1.0):
         """ 
         :param slf_filename: str                    SLF file name
         :param include_demolition: bool             Whether to calculate loss contribution from demolition
@@ -171,13 +172,15 @@ class Cost:
         # Collapse losses
         if collapse is None:
             # TODO, currently calling only x, to be modified to be based on the average of both x and y demands, or
-            #  the max (needs to be checked)
-            frag_calc = f.calc_collapse_fragility(ida_outputs["x"], edp_to_process=edp_for_collapse)
+            #  the max (needs to be checked and updated)
+            frag_calc = f.calc_collapse_fragility(ida_outputs["x"], edp_to_process=edp_for_collapse,
+                                                  use_beta_MDL=use_beta_MDL)
             theta_col = frag_calc['theta']
             beta_col = frag_calc['beta']
             p_collapse = stats.norm.cdf(np.log(iml_range / theta_col) / beta_col, loc=0, scale=1)
             loss_results['C'] = p_collapse
         else:
+            # Dispersion includes modelling uncertainty as well
             theta_col = collapse['theta']
             beta_col = collapse['beta']
             p_collapse = stats.norm.cdf(np.log(iml_range / theta_col) / beta_col, loc=0, scale=1)
@@ -309,3 +312,71 @@ class Cost:
         loss_results['E_LT'] = loss_results['E_NC_ND'] + 1 * loss_results['E_NC_D'] + 1 * loss_results['E_C']
 
         return loss_results
+
+    def compute_eal(self, iml, l, mdf, rc=1.0, method="Porter"):
+        """ 
+        Computation of EAL
+        :param iml: array                   IM levels in [g]
+        :param l: array                     Hazard curve (MAFE)
+        :param mdf: array                   Loss as a ratio of replacement cost
+        :param rc: float                    Replacement cost
+        :param method: str                  Calculation method: Porter -> Method 1, other -> applies numpy (technically the same)
+        :return eal_ratio: float            EAL as a % of the total replacement cost
+        :return cache: dict                 EAL bins, IML range and MAF for Visualization
+        """
+        if method == "Porter":
+            # Initialize contributions of EAL
+            eal_bins = np.array([])
+            # Initialize midpoint generation on IML
+            im_midpoint = np.array([])
+            for i in range(len(l) - 1):
+                # IML step
+                dIM = iml[i+1] - iml[i]
+                # Midpoint of consecutive IM levels
+                im_midpoint = np.append(im_midpoint, iml[i] + dIM / 2)
+                # dMAFEdIM, logarithmic gradient divided by IML step
+                dLdIM = np.log(l[i+1] / l[i]) / dIM
+                # Loss ratio step
+                dMDF = mdf[i+1] - mdf[i]
+                # EAL contribution at each level of IML
+                eal_bins = np.append(eal_bins, (mdf[i] * l[i] * (1 - np.exp(dLdIM*dIM)) - dMDF/dIM*l[i] *
+                                                (np.exp(dLdIM*dIM)*(dIM - 1/dLdIM) + 1/dLdIM)))
+            # EAL expressed in the units of total replacement cost
+            eal = rc * (sum(eal_bins) + l[-1])
+            # EAL ratio in % of the total building cost (rc)
+            eal_ratio = eal / rc * 100
+
+            # Cache
+            cache = {"eal_bins": eal_bins, "iml": iml, "probs": l, "mdf": mdf}
+            
+        else:
+            # IM level step
+            dIM = iml[1] - iml[0]
+            # Slopes
+            slopes = abs(np.gradient(l, dIM))
+            # EAL calculation through the trapezoidal rule
+            eal_ratio = trapz(y=mdf*slopes, x=iml) * 100
+
+            cache = None
+
+        return eal_ratio, cache
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
