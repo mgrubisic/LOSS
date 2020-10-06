@@ -110,7 +110,7 @@ class SLF:
                                 interpolation_functions[d][key][x][int(i[-1])] = interp1d(edp_temp, slf_temp)
 
         return interpolation_functions
-    
+
 
 if __name__ == "__main__":
     

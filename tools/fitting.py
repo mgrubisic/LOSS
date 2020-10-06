@@ -246,11 +246,12 @@ class Fitting:
         iml_stop = iml_max_sorted[-3]
         if iml_test > iml_stop:
             iml_test = iml_stop
+        
         exceeds = []
         for record in results['summary_results'].keys():
             if len(results['summary_results'][record]) != 0:
                 if len(results['summary_results'][record].keys()) > 1:
-                    edp = [results['summary_results'][record][iml]['max%s' % edp_to_process_mod][story] for iml in
+                    edp = [results['summary_results'][record][i]['max%s' % edp_to_process_mod][story] for i in
                            sorted(results['summary_results'][record].keys())]
                     iml = list(sorted(results['summary_results'][record].keys()))
                     edp = np.array(edp)

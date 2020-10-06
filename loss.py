@@ -13,9 +13,9 @@ from tools.visualize import Visualize
 # TODO, add loss curve, EAL, PV estimations
 class Loss:
     def __init__(self, directory=None, idaFileName=None, rsFileName=None, periodsFileName=None, slfFileName=None,
-                 hazardFileName=None, iml_max=10.0, iml_step=0.05, calculate_pga_values=False, include_demolition=True,
+                 hazardFileName=None, iml_max=2.0, iml_step=0.05, calculate_pga_values=False, include_demolition=True,
                  slf_normalization=False, non_directional_factor=1.0, collapse=None, use_beta_MDL=0.15,
-                 demolition=None):
+                 demolition=None, replCost=1):
         """
         Initialize Loss estimation framework based on story-loss functions
         :param directory: str                           Main working directory
@@ -34,6 +34,7 @@ class Loss:
         :param collapse: dict                           Median and dispersion of collapse fragility function, or None if needs to be computed
         :param use_beta_MDL: float                      Standard deviation accounting for modelling uncertainty to use, if default calculation is opted
         :param demolition: dict                         Median and COV of demolition fragility function
+        :param replCost: float                          Replacement cost of the building
         """
         # Set the main directory
         if directory is None:
@@ -82,6 +83,9 @@ class Loss:
 
         # Demolition CDF parameters
         self.demolition = demolition
+        
+        # Replacement cost of the building
+        self.replCost = replCost
 
     @staticmethod
     def get_init_time():
@@ -226,7 +230,7 @@ class Loss:
             cost = Cost(slf_filename=clientDirectory / self.slfFileName, include_demolition=self.include_demolition,
                         nonDirFactor=self.non_directional_factor)
         losses = cost.calc_losses(ida_outputs, self.iml_range, self.nstories, collapse=self.collapse,
-                                  use_beta_MDL=self.use_beta_MDL, demolition=self.demolition)
+                                  use_beta_MDL=self.use_beta_MDL, demolition=self.demolition, replCost=self.replCost)
         return losses
     
     def loss_ratios(self, losses, demolition_threshold=0.6):
@@ -261,7 +265,7 @@ class Loss:
         # Total
         E_LT = np.insert(np.array(losses['E_LT']), 0, 0)
         # Applying the demolition threshold, beyond which complete loss is assumed
-        E_LT[E_LT >= demolition_threshold] = 1.0
+        E_LT[E_LT >= demolition_threshold*self.replCost] = self.replCost
         
         # Interpolation functions
         E_NC_ND_ISDR_S_spline = interp1d(IML, E_NC_ND_ISDR_S)
@@ -280,7 +284,7 @@ class Loss:
         for key in losses.keys():
             exp_loss = np.insert(np.array(losses[key]), 0, 0)
             if key == "E_LT":
-                exp_loss[exp_loss >= demolition_threshold] = 1.0
+                exp_loss[exp_loss >= demolition_threshold*self.replCost] = self.replCost
             E_interpolation_functions[key] = interp1d(IML, exp_loss)
 
         return E_interpolation_functions
@@ -298,23 +302,23 @@ class Loss:
         iml_hazard = np.array(hazard["Sa(T1)"])
         # Ground shaking Mean annual frequency of exceedance
         probs = np.array(hazard["MAFE"])
-
+        
         # Calling the Cost object
         c = Cost()
         if method == "Porter":
             # Loss as the ratio of the replacement cost
-            mdf = spline(iml_hazard)
+            mdf = spline(iml_hazard)/self.replCost
             #  Computing the EAL ratio in %
-            eal, cache = c.compute_eal(iml_hazard, probs, mdf, rc=1.0, method=method)
+            eal, cache = c.compute_eal(iml_hazard, probs, mdf, rc=1, method=method)
         else:
             # IML
             interpolation = interp1d(iml_hazard, probs)
             iml = np.arange(iml_hazard[0], iml_hazard[-1], 0.01)
             l = interpolation(iml)
             # Loss as the ratio of the replacement cost
-            mdf = spline(iml)
+            mdf = spline(iml)/self.replCost
             #  Computing the EAL ratio in %
-            eal, cache = c.compute_eal(iml, probs, mdf, rc=1.0, method=method)
+            eal, cache = c.compute_eal(iml, probs, mdf, rc=1, method=method)
         return eal, cache
 
 
@@ -323,14 +327,16 @@ if __name__ == "__main__":
     # TODO, rsFileName being used when? Update file
     #  slf_normalization being used when?
     # Inputs
-    collapse = {"theta": 1.5, "beta": 0.33}
+    collapse = {"theta": 1.49, "beta": 0.33}
     demolition = {"median": 0.015, "cov": 0.30}
+    replCost = 3929937.
     # Set up a main directory
     directory = Path.cwd()
     # Loss object Initialization
+    # SLFs are already normalized with respect to the building replacement cost
     l = Loss(calculate_pga_values=False, idaFileName=["ancona_x.pickle", "ancona_y.pickle"], rsFileName="RS.pickle",
-             hazardFileName="ancona_hazard.csv", periodsFileName="Periods.tcl", slfFileName="slfs.pickle",
-             include_demolition=False, non_directional_factor=1.2, collapse=collapse, demolition=demolition)
+             hazardFileName="ancona_hazard.csv", periodsFileName="Periods.tcl", slfFileName="slfsVersion6.pickle",
+             include_demolition=True, non_directional_factor=1.2, collapse=collapse, demolition=demolition, replCost=replCost)
     # Get start time
     start_time = l.get_init_time()
 
@@ -345,14 +351,36 @@ if __name__ == "__main__":
     print(f"[EAL]: {eal: .2f}%")
     # Data visualization
     # EAL visualization
+    sflag = False
+    pflag = True
     v = Visualize()
-    v.plot_eal(cache, loss, pflag=False, sflag=True)
+    cache_eal = v.plot_eal(cache, loss, pflag=pflag, sflag=sflag, replCost=replCost)
     # Loss curves, vulnerability curves
-    v.plot_loss_curves(loss, pflag=False, sflag=True)
+    v.plot_loss_curves(loss, pflag=pflag, sflag=sflag)
     # Plot vulnerability curve
-    v.plot_vulnerability(cache, pflag=False, sflag=True)
+    v.plot_vulnerability(cache, demolition_threshold=0.6, pflag=pflag, sflag=sflag)
     # Area plots of loss contributions
-    v.area_plots(cache, loss, pflag=False, sflag=True)
+    v.area_plots(cache, loss, pflag=pflag, sflag=sflag)
 
     # Get running time
     l.get_time(start_time)
+    
+    
+    # import pickle
+    with open("cache.pkl", "wb") as f:
+        pickle.dump(cache, f, pickle.HIGHEST_PROTOCOL)
+        
+    with open("cache_eal.pkl", "wb") as f:
+        pickle.dump(cache_eal, f, pickle.HIGHEST_PROTOCOL)
+    
+    with open("loss.pkl", "wb") as f:
+        pickle.dump(loss, f, pickle.HIGHEST_PROTOCOL)
+        
+        
+        
+        
+        
+        
+    
+    
+    

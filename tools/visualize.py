@@ -74,14 +74,15 @@ class Visualize:
             subprocess.call([inkscape_path, svg_filepath, '--export-png', png_filepath])
             os.remove(svg_filepath)
 
-    def plot_eal(self, cache, losses, sflag=False, pflag=False):
+    def plot_eal(self, cache, losses, sflag=False, pflag=False, replCost=1.0):
         """
         EAL plots
         :param cache: array                     EAL cache
         :param losses: dict                     Loss ratios
         :param sflag: bool                      Storing as emf flag
         :param pflag: bool                      Plotting flag
-        :return: None
+        :param replCost: float                  Replacement cost of the building
+        :return: dict                           Cache of MDFs and EALs
         """
         # Reading from cache
         """
@@ -128,47 +129,58 @@ class Visualize:
             else:
                 label = r'$L_{NC, NS \cap R}$ (Non Collapse Non-Structural-Repair)'
             labels.append(label)
-
+        
+        # Generate IMl range based on IM of Hazard
+        iml_range = np.linspace(iml[0], iml[-1], len(iml))
+        # Spline for Hazard
+        spline_hazard = interp1d(iml, probs)
+        probs = spline_hazard(iml_range)
+        
         # Get the IML range for plotting
         IML = np.insert(np.array([float(i) for i in losses.index]), 0, 0)
         EALs = []
-        mdf = np.zeros((len(tags), len(iml)))
+        mdf = np.zeros((len(tags), len(iml_range)))
         for j in range(mdf.shape[0]):
             # Get the loss ratios
             loss = np.array(losses[tags[j]])
             # Set an interpolation function
             spline = interp1d(IML, np.insert(loss, 0, 0))
             # Loss ratios
-            mdf[j, :] = spline(iml)
+            mdf[j, :] = spline(iml_range)
             # Initialize EAL bins
             dEAL = []
             for i in range(len(probs) - 1):
-                dIM = iml[i + 1] - iml[i]
-                delIM = iml[i] + dIM / 2
+                dIM = iml_range[i + 1] - iml_range[i]
+                delIM = iml_range[i] + dIM / 2
                 dLdIM = np.log(probs[i + 1] / probs[i]) / dIM
                 dMDF = mdf[j, i + 1] - mdf[j, i]
                 dEAL.append(mdf[j, i] * probs[i] * (1 - np.exp(dLdIM * dIM)) - dMDF / dIM * probs[i] *
                             (np.exp(dLdIM * dIM) * (dIM - 1 / dLdIM) + 1 / dLdIM))
             if tags[j] == "E_LT" or tags[j] == "E_C":
                 # Add only once
-                add = probs[-1]
+                add = probs[-1]*replCost
             else:
                 add = 0
             # EAL contributions from each category
             EALs.append((sum(dEAL) + add) * 100)
-
+        
         # Plotting
         EALs = np.flip(EALs, axis=0)
         EALs = np.delete(EALs, obj=0, axis=0)
+        
         fig2, ax = plt.subplots(figsize=(4, 3), dpi=100)
         cnt = 0
         for i in range(len(EALs)):
             if i == 0:
                 bottom = 0
+                eal_text = EALs[i]
             else:
-                bottom = sum(EALs[:i])
+                bottom = sum(EALs[: i])
+                eal_text = sum(EALs[: i+1])
             plt.bar(0.5, EALs[i], width=0.15, bottom=bottom, edgecolor='none', zorder=1000,
-                    label=labels[i], color=self.color_grid[cnt])
+                    label=labels[-2-i], color=self.color_grid[cnt])
+            
+            plt.text(0.6, eal_text, f"{eal_text:.2f}%", color=self.color_grid[cnt])
             cnt += 2
         plt.ylabel("Expected Annual Loss Ratio [%]")
         plt.xlim(0.3, 0.7)
@@ -182,7 +194,10 @@ class Visualize:
         if sflag:
             name = self.figureDirectory / "EAL"
             self.plot_as_emf(fig2, filename=name)
-
+            
+        cache = {"mdf": mdf, "EALs": EALs}
+        return cache
+    
     def plot_loss_curves(self, losses, sflag=False, pflag=False):
         """
         Plots loss curves / vulnerability functions disaggregated by component groups, collapse and demolition
@@ -227,10 +242,11 @@ class Visualize:
             name = self.figureDirectory / "Loss_curves"
             self.plot_as_emf(fig, filename=name)
 
-    def plot_vulnerability(self, cache, sflag=False, pflag=False):
+    def plot_vulnerability(self, cache, demolition_threshold=None, sflag=False, pflag=False):
         """
         Plots the vulnerability curve
         :param cache: array                     EAL cache
+        :param demolition_threshold: float      Threshold beyond which total loss is assumed
         :param sflag: bool                      Storing as emf flag
         :param pflag: bool                      Plotting flag
         :return: None
@@ -242,9 +258,12 @@ class Visualize:
         """
         probs = cache["probs"]
         elr = cache["mdf"]
+        if demolition_threshold is not None:
+            elr[elr > demolition_threshold] = 1.0
+            
         # Return periods
         rp = 1 / probs
-
+        
         fig, ax = plt.subplots(figsize=(4, 3), dpi=100)
         plt.plot(rp, elr, color=self.color_grid[0], marker="o")
         ax.set_xscale("log")
@@ -291,12 +310,13 @@ class Visualize:
             spline = interp1d(IML, np.insert(np.array(losses[tags[i]]), 0, 0))
             loss_contr[i, :] = spline(iml) / loss_t
         loss_contr = np.flip(loss_contr, axis=0)
+        
         # Plotting
         fig, ax = plt.subplots(figsize=(5, 3), dpi=100)
-        labels = [r'$L_{NC, NS \cap R}$ (Non Collapse Non-Structural-Repair)',
-                  r'$L_{NC, S \cap R}$ (Non Collapse Structural-Repair)',
+        labels = [r'$L_{NC \cap D}$ (Non Collapse-Demolition)',
                   r'$L_{C}$ (Collapse Loss)',
-                  r'$L_{NC \cap D}$ (Non Collapse-Demolition)']
+                  r'$L_{NC, S \cap R}$ (Non Collapse Structural-Repair)',
+                  r'$L_{NC, NS \cap R}$ (Non Collapse Non-Structural-Repair)']
         ax = plt.gca()
         ax.stackplot(rp, loss_contr, labels=labels, colors=self.color_grid)
         ax.set_xscale("log")

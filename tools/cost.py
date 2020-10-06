@@ -19,6 +19,47 @@ class Cost:
         self.slf_filename = slf_filename
         self.include_demolition = include_demolition
         self.nonDirFactor = nonDirFactor
+        self.nstories = None
+        
+    def get_non_dir_ida_results(self, ida_outputs):
+        """
+        Transforms IDA demands by a non-dimensional factor
+        :param ida_outputs:                         IDA outputs
+        :returns: dict                              Transformed IDA outputs
+        """
+        nonDirFactor = self.nonDirFactor
+        
+        # Get max demand and multiply by nonDirFactor
+        ida = {}
+        direction_keys = list(ida_outputs.keys())
+        # ASSUMPTION: IML levels are the same, TODO, too rigid of a condition for a code to work for flexible inputs
+        for key in ida_outputs[direction_keys[0]].keys():
+            ida[key] = {}
+            for gm in ida_outputs[direction_keys[0]][key].keys():
+                ida[key][gm] = {}
+                if key == "IDA":
+                    for e in ida_outputs[direction_keys[0]][key][gm].keys():
+                        if e == "ISDR" or e == "PFA":
+                            ida[key][gm][e] = np.amax(np.stack((ida_outputs[direction_keys[0]][key][gm][e],
+                                                                ida_outputs[direction_keys[1]][key][gm][e])),
+                                                      axis=0) * nonDirFactor
+                        else:
+                            ida[key][gm][e] = ida_outputs[direction_keys[0]][key][gm][e]
+                else:
+                    for i in ida_outputs[direction_keys[0]][key][gm].keys():
+                        ida[key][gm][i] = {}
+                        for e in ida_outputs[direction_keys[0]][key][gm][i].keys():
+                            if e == "maxISDR" or e == "maxFA":
+                                ida[key][gm][i][e] = {}
+                                for st in ida_outputs[direction_keys[0]][key][gm][i][e].keys():
+                                    ida[key][gm][i][e][st] = max(ida_outputs[direction_keys[0]][key][gm][i][e][st],
+                                                                 ida_outputs[direction_keys[1]][key][gm][i][e][st])\
+                                                             * nonDirFactor
+                            else:
+                                ida[key][gm][i][e] = {}
+                                for st in ida_outputs[direction_keys[0]][key][gm][i][e].keys():
+                                    ida[key][gm][i][e][st] = ida_outputs[direction_keys[0]][key][gm][i][e][st]
+        return ida
 
     def get_drift_sensitive_losses(self, ida_outputs, story, iml, interpolation, directionality=False,
                                    edp_to_process="ISDR", direction=None):
@@ -39,7 +80,6 @@ class Cost:
 
         # Check directionality of component groups
         if directionality:
-            nonDirFactor = 1.0
             direction_tag = "Directional"
 
             # Probabilities of exceedance
@@ -52,51 +92,18 @@ class Cost:
             # Apply interpolation
             for edp in interpolation[direction_tag].keys():
                 if edp == "IDR_S":
-                    story_loss_ratio_idr_sd = sum(interpolation[direction_tag][edp][direction][story](self.idr / 100)
+                    cost_sd = sum(interpolation[direction_tag][edp][direction][story](self.idr / 100)
                                                   * p_edp)
                 elif edp == "IDR_NS":
-                    story_loss_ratio_idr_nsd = sum(interpolation[direction_tag][edp][direction][story](self.idr / 100)
+                    cost_nsd = sum(interpolation[direction_tag][edp][direction][story](self.idr / 100)
                                                    * p_edp)
-
-            return story_loss_ratio_idr_sd, story_loss_ratio_idr_nsd
+            return cost_sd, cost_nsd
 
         else:
-            nonDirFactor = self.nonDirFactor
             direction_tag = "Non-directional"
 
-            # Get max demand and multiply by nonDirFactor
-            ida = {}
-            direction_keys = list(ida_outputs.keys())
-            # ASSUMPTION: IML levels are the same, TODO, too rigid of a condition for a code to work for flexible inputs
-            for key in ida_outputs[direction_keys[0]].keys():
-                ida[key] = {}
-                for gm in ida_outputs[direction_keys[0]][key].keys():
-                    ida[key][gm] = {}
-                    if key == "IDA":
-                        for e in ida_outputs[direction_keys[0]][key][gm].keys():
-                            if e == "ISDR" or e == "PFA":
-                                ida[key][gm][e] = np.amax(np.stack((ida_outputs[direction_keys[0]][key][gm][e],
-                                                                    ida_outputs[direction_keys[1]][key][gm][e])),
-                                                          axis=0) * nonDirFactor
-                            else:
-                                ida[key][gm][e] = ida_outputs[direction_keys[0]][key][gm][e]
-                    else:
-                        for i in ida_outputs[direction_keys[0]][key][gm].keys():
-                            ida[key][gm][i] = {}
-                            for e in ida_outputs[direction_keys[0]][key][gm][i].keys():
-                                if e == "maxISDR" or e == "maxPFA":
-                                    ida[key][gm][i][e] = {}
-                                    for st in ida_outputs[direction_keys[0]][key][gm][i][e].keys():
-                                        ida[key][gm][i][e][st] = max(ida_outputs[direction_keys[0]][key][gm][i][e][st],
-                                                                     ida_outputs[direction_keys[1]][key][gm][i][e][st])\
-                                                                 * nonDirFactor
-                                else:
-                                    ida[key][gm][i][e] = {}
-                                    for st in ida_outputs[direction_keys[0]][key][gm][i][e].keys():
-                                        ida[key][gm][i][e][st] = ida_outputs[direction_keys[0]][key][gm][i][e][st]
-
             # Get probabilities of exceedance
-            frag_calc = f.calc_p_edp_given_im(ida, story, edp_to_process, iml, self.idr)
+            frag_calc = f.calc_p_edp_given_im(ida_outputs, story, edp_to_process, iml, self.idr)
             edp_theta = frag_calc['theta']
             edp_beta = frag_calc['beta']
             p_edp = stats.norm.pdf(np.log(self.idr / edp_theta) / edp_beta, loc=0, scale=1)
@@ -105,14 +112,14 @@ class Cost:
             # Apply interpolation
             for edp in interpolation[direction_tag].keys():
                 if edp == "IDR_S":
-                    story_loss_ratio_idr_sd = sum(interpolation[direction_tag][edp][story](self.idr / 100) * p_edp)
+                    cost_sd = sum(interpolation[direction_tag][edp][story](self.idr / 100) * p_edp)
                 elif edp == "IDR_NS":
-                    story_loss_ratio_idr_nsd = sum(interpolation[direction_tag][edp][story](self.idr / 100) * p_edp)
+                    cost_nsd = sum(interpolation[direction_tag][edp][story](self.idr / 100) * p_edp)
 
             # Storing the already modified IDA results to be used for the PFA-sensitive non-directional components
-            cache = ida
-            story_loss_ratios = [story_loss_ratio_idr_sd, story_loss_ratio_idr_nsd]
-            return story_loss_ratios, cache
+            costs = [cost_sd, cost_nsd]
+            
+            return costs
 
     def get_acceleration_sensitive_losses(self, ida_outputs, floor, iml, interpolation, edp_to_process="PFA"):
         """
@@ -134,12 +141,13 @@ class Cost:
         p_edp = stats.norm.pdf(np.log(self.acc / edp_theta) / edp_beta, loc=0, scale=1)
         p_edp = p_edp / sum(p_edp)
         story_loss_ratio_acc_partial = sum(interpolation[floor](self.acc) * p_edp)
-        story_loss_ratio_acc_partial /= 2
-        story_loss_ratio_acc = story_loss_ratio_acc_partial
-        return story_loss_ratio_acc
+        if floor != 0 and floor != self.nstories:
+            story_loss_ratio_acc_partial /= 2
+        cost = story_loss_ratio_acc_partial
+        return cost
 
     def calc_losses(self, ida_outputs, iml_range, nstories, edp_for_collapse="ISDR", edp_for_demolition="RISDR", 
-                    collapse=None, demolition=None, use_beta_MDL=0.15):
+                    collapse=None, demolition=None, use_beta_MDL=0.15, replCost=1):
         """
         Calculates expected losses based on provided storey-loss functions
         :param ida_outputs: dict                    IDA outputs
@@ -150,6 +158,7 @@ class Cost:
         :param collapse: dict                       Median and dispersion of collapse fragility function, or None if needs to be computed
         :param demolition: dict                     Median and dispersion of dispersion fragility function, or None if default is used
         :param use_beta_MDL: float                  Standard deviation accounting for modelling uncertainty to use
+        :param replCost: float                      Replacement cost of the building
         :return: dict                               Calculated losses
         """
         """
@@ -158,6 +167,11 @@ class Cost:
         Headers/per story:      R = Residual, ISDR = inter-story drift ratio, SD - structural damage
                                 NSD = non-structural damage, PFA = peak floor acceleration, TOTAL = Total
         """
+        self.nstories = nstories
+        
+        # Get IDA results for Non-dimensional components
+        ida_non_dir = self.get_non_dir_ida_results(ida_outputs)
+        
         # Initialize loss dictionary with appropriate headers
         df_headers = ['C', 'D']
         df_headers_storey = ['_R_ISDR_SD', '_R_ISDR_NSD', '_R_ISDR_TOTAL', '_R_PFA', '_R_TOTAL']
@@ -235,13 +249,14 @@ class Cost:
                     if dirType == "Non-directional":
 
                         # Drift-sensitive losses
-                        temp, cache = self.get_drift_sensitive_losses(ida_outputs, story, iml, interpolation_functions)
+                        temp = self.get_drift_sensitive_losses(ida_non_dir, story, iml, interpolation_functions)
+                        
                         story_loss_ratio_idr_sd += temp[0]
                         story_loss_ratio_idr_nsd += temp[1]
 
                         # Acceleration-sensitive losses
                         for floor in [story - 1, story]:
-                            temp = self.get_acceleration_sensitive_losses(cache, floor, iml,
+                            temp = self.get_acceleration_sensitive_losses(ida_non_dir, floor, iml,
                                                                           interpolation_functions["Non-directional"][
                                                                               "PFA_NS"], "PFA")
                             story_loss_ratio_acc += temp
@@ -256,6 +271,7 @@ class Cost:
                             temp = self.get_drift_sensitive_losses(ida_outputs[key], story, iml,
                                                                    interpolation_functions, directionality=True,
                                                                    direction=direction)
+                            
                             story_loss_ratio_idr_sd += temp[0]
                             story_loss_ratio_idr_nsd += temp[1]
 
@@ -278,11 +294,11 @@ class Cost:
                 r_pfa_total += r_pfa
                 r_total_total += r_total
 
-                # Create headers for the repair losses per component group type and assign the computed values
-                columns = ['R_ISDR_SD_TOTAL', 'R_ISDR_NSD_TOTAL', 'R_ISDR_TOTAL_TOTAL', 'R_PFA_TOTAL',
-                           'R_TOTAL_TOTAL']
-                values = [r_isdr_sd_total, r_isdr_nsd_total, r_isdr_total_total, r_pfa_total, r_total_total]
-                loss_results.loc['%.2f' % iml_test, columns] = values
+            # Create headers for the repair losses per component group type and assign the computed values
+            columns = ['R_ISDR_SD_TOTAL', 'R_ISDR_NSD_TOTAL', 'R_ISDR_TOTAL_TOTAL', 'R_PFA_TOTAL',
+                       'R_TOTAL_TOTAL']
+            values = [r_isdr_sd_total, r_isdr_nsd_total, r_isdr_total_total, r_pfa_total, r_total_total]
+            loss_results.loc['%.2f' % iml_test, columns] = values
 
         """Compute the expected total losses per component group.
         Disaggregation of losses"""
@@ -305,9 +321,9 @@ class Cost:
         # Non-collapse, non-demolition
         loss_results['E_NC_ND'] = loss_results['E_NC_ND_S'] + loss_results['E_NC_ND_NS']
         # Non-collapse, demolition
-        loss_results['E_NC_D'] = loss_results['D'] * (1 - loss_results['C'])
+        loss_results['E_NC_D'] = loss_results['D'] * (1 - loss_results['C']) * replCost
         # Collapse
-        loss_results['E_C'] = loss_results['C']
+        loss_results['E_C'] = loss_results['C'] * replCost
         # Total losses, i.e. non-collapse, non-demolition + non-collapse, demolition + collapse
         loss_results['E_LT'] = loss_results['E_NC_ND'] + 1 * loss_results['E_NC_D'] + 1 * loss_results['E_C']
 
