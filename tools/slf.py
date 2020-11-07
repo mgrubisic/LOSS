@@ -96,6 +96,9 @@ class SLF:
                         # Loop for each floor or story
                         for i in df[d][key].keys():
                             edp_temp = np.insert(df[d][key][i]["edp"], 0, 0)
+                            # Truncating the lower tail to zero to avoid negative costs (in case it was not done earlier)
+                            df[d][key][i]["loss"][df[d][key][i]["loss"] < 0] = 0.0
+                            
                             slf_temp = np.insert(df[d][key][i]["loss"], 0, 0)
                             interpolation_functions[d][key][int(i[-1])] = interp1d(edp_temp, slf_temp)
                     # IDR-sensitive components
