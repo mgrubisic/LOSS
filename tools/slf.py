@@ -53,7 +53,7 @@ class SLF:
             df["E_S_IDR"] = df["E_S_IDR"] * max_s_psd / max(y_s_psd_range) * storey_loss_ratio_weight
             
         else:
-            # Already normalized SLFs that accounts for the whole building inventory in a 3D space
+            # SLFs that accounts for the whole building inventory in a 3D space
             file = open(filename, "rb")
             df = pickle.load(file)
             file.close()
@@ -66,7 +66,7 @@ class SLF:
         Structure of SLF dictionary:
             Directional -> IDR_NS, IDR -> dir1, dir2 -> stories -> edp vs loss
             Non-directional -> IDR_S, IDR_NS, PFA_NS -> stories or floors -> edp vs loss
-        :param df: DataFrame or dict                Storey loss functions in terms of ELR and EDP4
+        :param df: DataFrame or dict                Storey loss functions in terms of ELR and EDP
         :return interpolation_functions: dict       Interpolation functions normalized by total building cost
         """
         interpolation_functions = {}
@@ -96,7 +96,8 @@ class SLF:
                         # Loop for each floor or story
                         for i in df[d][key].keys():
                             edp_temp = np.insert(df[d][key][i]["edp"], 0, 0)
-                            # Truncating the lower tail to zero to avoid negative costs (in case it was not done earlier)
+                            # Truncating the lower tail to zero to avoid negative costs
+                            # (in case it was not done earlier)
                             df[d][key][i]["loss"][df[d][key][i]["loss"] < 0] = 0.0
                             
                             slf_temp = np.insert(df[d][key][i]["loss"], 0, 0)

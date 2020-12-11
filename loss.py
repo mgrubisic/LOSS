@@ -14,31 +14,36 @@ from tools.visualize import Visualize
 
 # TODO, add loss curve, PV estimations
 class Loss:
-    def __init__(self, directory=None, nrhaFileName=None, rsFileName=None, periodsFileName=None, slfFileName=None,
+    def __init__(self, directory=None, nrhaFileName=None, rsFileName=None, period=None, slfFileName=None,
                  hazardFileName=None, calculate_pga_values=False, include_demolition=True,
-                 slf_normalization=False, non_directional_factor=1.0, collapse=None, use_beta_MDL=0.15,
-                 demolition=None, replCost=1.0, betas=None, performSimulations=False, num_realization=1000):
+                 non_directional_factor=1.0, collapse=None, use_beta_MDL=0.15,
+                 demolition=None, replCost=1.0, betas=None, performSimulations=False, num_realization=1000,
+                 iml_range_consistent=False):
         """
         Initialize Loss estimation framework based on story-loss functions
         TODO, works only when the IML range is the same for all records, add option to do interpolation, if otherwise
         :param directory: str                           Main working directory
         :param nrhaFileName: str                        Incremental dynamic analysis (IDA) filename
         :param rsFileName: str                          Scaled Response spectra (RS) file name
-        :param periodsFileName: str                     File name containing 1st mode periods of the buildings
+        :param period: float                            Fundamental period of the structure
         :param slfFileName: str                         SLF file name
         :param hazardFileName: str                      Hazard function file name
         :param calculate_pga_values: bool               Whether to calculate the PGA values (usually True if none
                                                         provided)
         :param include_demolition: bool                 Whether to calculate loss contribution from demolition
-        :param slf_normalization: bool                  Whether to perform SLF normalization based on provided replacement cost or not
-        :param non_directional_factor: float            Non-directional conversion factor for components of no-directionality
-        :param collapse: dict                           Median and dispersion of collapse fragility function, or None if needs to be computed
-        :param use_beta_MDL: float                      Standard deviation accounting for modelling uncertainty to use, if default calculation is opted
+        :param non_directional_factor: float            Non-directional conversion factor for components of
+                                                        no-directionality
+        :param collapse: dict                           Median and dispersion of collapse fragility function, or None if
+                                                        needs to be computed
+        :param use_beta_MDL: float                      Standard deviation accounting for modelling uncertainty to use,
+                                                        if default calculation is opted
         :param demolition: dict                         Median and COV of demolition fragility function
         :param replCost: float                          Replacement cost of the building
         :param betas: ndarray                           Modelling uncertainties (epistemic variabilities)
         :param performSimulations: bool                 Whether to perform simulations using Latin Hypercube sampling
         :param num_realization: int                     Number of realizations
+        :param iml_range_consistent: bool               If True derives IML range (same for each record), else uses IML
+                                                        range different for each record
         """
         # Set the main directory
         if directory is None:
@@ -53,7 +58,7 @@ class Loss:
         self.rsFileName = rsFileName
 
         # Get the periods file name
-        self.periodsFileName = periodsFileName
+        self.period = period
 
         # Get the SLF file name
         self.slfFileName = slfFileName
@@ -66,9 +71,6 @@ class Loss:
 
         # Demolition contribution flag
         self.include_demolition = include_demolition
-
-        # SLF normalization flag
-        self.slf_normalization = slf_normalization
 
         # Non-directional conversion factor
         self.non_directional_factor = non_directional_factor
@@ -100,6 +102,9 @@ class Loss:
         # IML range
         self.iml_range = None
 
+        # IML consistency
+        self.iml_range_consistent = iml_range_consistent
+
     @staticmethod
     def get_init_time():
         """
@@ -130,12 +135,13 @@ class Loss:
         print('Running time: ', self.truncate(elapsed, 1), ' seconds')
         print('Running time: ', self.truncate(elapsed / float(60), 2), ' minutes')
 
-    def calc_PGA(self):
+    def calc_PGA(self, idaOutputs):
         """
         Calculate the PGA values
-        :return: dict                               IDA outputs
+        :param idaOutputs: dict                     IDA outputs
+        :return: dict                               Modified IDA outputs (inclusion of PGA)
         """
-        sat1 = SaT1(self.rsFileName, self.periodsFileName, self.nrhaFileName)
+        sat1 = SaT1(self.rsFileName, self.period, idaOutputs)
         outputs = sat1.calc_ida_PGA()
         return outputs
 
@@ -275,16 +281,22 @@ class Loss:
         W = np.exp(Z).transpose()
         return W
 
-    def get_residuals(self, demands):
+    def get_residuals(self, demands, sorting=False):
         """
         Transforms residual drifts into an array format
         :param demands: dict                    NRHA outputs
+        :param sorting: bool                    Whether to sort the RIDR based on IML
         :return: arraay                         Residual drifts
         """
-        ridr = np.zeros((len(self.iml_range), len(demands)))
+        key = next(iter(demands))
+        ridr = np.zeros((len(demands[key]["IM"]), len(demands)))
         cnt = 0
         for gm in demands:
-            ridr[:, cnt] = demands[gm]["RISDR"]
+            data = demands[gm]["RISDR"]
+            if sorting:
+                order = np.argsort(demands[gm]["IM"])
+                data = data[order]
+            ridr[:, cnt] = data
             cnt += 1
         return ridr
 
@@ -303,13 +315,14 @@ class Loss:
         RS is in s vs g
         :return: dict                                   Dictionary containing IDA, RS, Periods and Nstories information
         """
-        # Get client directory
+        # Get client directory (in case no name for the files were provided)
         clientDirectory = self.directory / "client"
 
         """ Read IDA outputs if file name was not provided, search for any within the client directory
         This will run all IDA files, so be careful as it could enter an extensive analysis requiring a large
         computational effort
         It is highly recommended to provide the file names MANUALLY"""
+        nrhaTemp = {}
         if self.nrhaFileName is None:
             for file in os.listdir(clientDirectory):
                 if (file.endswith(".pickle") or file.endswith(".pkl")) and file.startswith("ida_"):
@@ -318,65 +331,84 @@ class Loss:
                     nrha_file.close()
                     self.nrhaFileName = clientDirectory / file
         else:
-            nrhaTemp = {}
-            for fileName in self.nrhaFileName:
-                nrha_file = open(clientDirectory / fileName, "rb")
+            if isinstance(self.nrhaFileName, list):
+                for fileName in self.nrhaFileName:
+                    nrha_file = open(fileName, "rb")
+                    ida_temp = pickle.load(nrha_file)
+                    nrha_file.close()
+                    fileName = os.path.basename(fileName)
+                    fileName = fileName.strip(".pickle")
+                    nrhaTemp[fileName[-1]] = ida_temp
+            else:
+                nrha_file = open(self.nrhaFileName, "rb")
                 ida_temp = pickle.load(nrha_file)
                 nrha_file.close()
-                fileName = fileName.strip(".pickle")
-                nrhaTemp[fileName[-1]] = ida_temp
+                nrhaTemp["IDAs"] = ida_temp
 
         # Reading of the RS file
+        rs = None
         if self.rsFileName is None:
             for file in os.listdir(clientDirectory):
                 if file.startswith("RS") or file.startswith("rs"):
                     rs = pd.read_pickle(clientDirectory / file)
                     self.rsFileName = clientDirectory / file
         else:
-            rs = pd.read_pickle(clientDirectory / self.rsFileName)
-
-        # Get the fundamental (1st mode) periods of the buildings under consideration
-        if self.periodsFileName is None:
-            for file in os.listdir(clientDirectory):
-                if file.startswith("period") or file.startswith("Period"):
-                    periods = pd.read_csv(clientDirectory / file, index_col=None)
-                    self.periodsFileName = clientDirectory / file
-        else:
-            periods = pd.read_csv(clientDirectory / self.periodsFileName, index_col=None)
+            rs = pd.read_pickle(self.rsFileName)
 
         # Get the hazard function
+        hazard = None
         if self.hazardFileName is None:
             for file in os.listdir(clientDirectory):
                 if "hazard" in file or "Hazard" in file:
                     hazard = pd.read_csv(clientDirectory / file)
                     self.hazardFileName = clientDirectory / file
         else:
-            hazard = pd.read_csv(clientDirectory / self.hazardFileName)
-
+            basename = os.path.basename(self.hazardFileName)
+            if basename.endswith(".csv"):
+                hazard = pd.read_csv(self.hazardFileName)
+            else:
+                # Pickle file
+                with open(self.hazardFileName, "rb") as file:
+                    hazard = pickle.load(file)
+                    
         # Get number of stories of the building
-        for i in nrhaTemp["x"]["summary_results"]:
-            for j in nrhaTemp["x"]["summary_results"][i].keys():
-                for k in nrhaTemp["x"]["summary_results"][i][j].keys():
-                    for key in nrhaTemp["x"]["summary_results"][i][j].get(k):
-                        self.nstories = key
+        key = next(iter(nrhaTemp))
+        for i in nrhaTemp[key]["summary_results"]:
+            for j in nrhaTemp[key]["summary_results"][i].keys():
+                for k in nrhaTemp[key]["summary_results"][i][j].keys():
+                    for m in nrhaTemp[key]["summary_results"][i][j].get(k):
+                        self.nstories = m
                     break
                 break
             break
 
         # Check whether peak ground acceleration (PGA) values are provided, if not, calculate them
         if self.calculate_pga_values:
-            nrhaTemp = self.calc_PGA()
+            nrhaTemp = self.calc_PGA(nrhaTemp)
 
         # Calculate original IML range (this assumes that each record has the same iml range
-        # TODO, add interpolation here to homogenize iml range, and in general homogenize NRHA results (e.g. IDA)
-        for gm in nrhaTemp["x"]["IDA"].keys():
-            self.iml_range = nrhaTemp["x"]["IDA"][gm]["IM"]
-            break
+        sortingRIDR = False
+        if self.iml_range_consistent:
+            for gm in nrhaTemp[key]["IDA"].keys():
+                self.iml_range = nrhaTemp[key]["IDA"][gm]["IM"]
+                break
+        else:
+            # Get ndarray of IML range for each record
+            keygm = next(iter(nrhaTemp[key]["IDA"]))
+            self.iml_range = np.zeros((len(nrhaTemp[key]["IDA"][keygm]["IM"]), len(nrhaTemp[key]["IDA"])))
+            cnt = 0
+            for rec in nrhaTemp[key]["IDA"].keys():
+                # "IDA" is not sorted, while "summary_results" are sorted, and since EDPs will be read from
+                # "summary_results", we need to sort the IM values here
+                self.iml_range[:, cnt] = np.sort(nrhaTemp[key]["IDA"][rec]["IM"])
+                sortingRIDR = True
+                cnt += 1
 
         # Modify NRHA dict into a ndarray
-        nrhaOutputs = {"x": self._into_ndarray(nrhaTemp["x"]["summary_results"]),
-                       "y": self._into_ndarray(nrhaTemp["y"]["summary_results"])}
-        
+        nrhaOutputs = {}
+        for key in nrhaTemp.keys():
+            nrhaOutputs[key] = self._into_ndarray(nrhaTemp[key]["summary_results"])
+
         # Replace nans with means of records at each IML
         for key in nrhaOutputs:
             means_nrha = np.nanmean(nrhaOutputs[key], axis=1)
@@ -393,12 +425,11 @@ class Loss:
                     nrha[d][i, :, :] = self.simulate_demands(nrhaOutputs[d][i, :, :], self.betas[i])
         else:
             nrha = nrhaOutputs
-            
-        # Get residual drifts
-        ridr = self.get_residuals(nrhaTemp["x"]["IDA"])
 
-        return {"NRHA": nrha, "residuals": ridr, "RS": rs, "Periods": periods, "Hazard": hazard,
-                "Nstories": self.nstories}
+        # Get residual drifts (based only on one direction)
+        ridr = self.get_residuals(nrhaTemp[key]["IDA"], sorting=sortingRIDR)
+
+        return {"NRHA": nrha, "residuals": ridr, "RS": rs, "Hazard": hazard, "Nstories": self.nstories}
 
     def calc_losses(self, nrhaOutputs, ridr):
         """
@@ -412,17 +443,18 @@ class Loss:
         # Get client directory
         clientDirectory = self.directory / "client"
 
+        cost = None
         if self.slfFileName is None:
             for file in os.listdir(clientDirectory):
-                if file.startswith("slf"):
+                if file.startswith("slf") or file.startswith("SLF"):
                     cost = Cost(self.nstories, slf_filename=clientDirectory / file,
                                 include_demolition=self.include_demolition, nonDirFactor=self.non_directional_factor)
+                    self.slfFileName = clientDirectory / file
                 else:
                     raise ValueError("[EXCEPTION] SLFs are missing!")
-            self.slfFileName = clientDirectory / file
         else:
-            cost = Cost(self.nstories, slf_filename=clientDirectory / self.slfFileName,
-                        include_demolition=self.include_demolition, nonDirFactor=self.non_directional_factor)
+            cost = Cost(self.nstories, slf_filename=self.slfFileName, include_demolition=self.include_demolition,
+                        nonDirFactor=self.non_directional_factor)
         
         losses = cost.calc_losses(nrhaOutputs, ridr, self.iml_range, collapse=self.collapse,
                                   use_beta_MDL=self.use_beta_MDL, demolition=self.demolition, replCost=self.replCost)
@@ -480,7 +512,7 @@ class Loss:
             exp_loss = np.insert(np.array(losses[key]), 0, 0)
             if key == "E_LT":
                 exp_loss[exp_loss >= demolition_threshold*self.replCost] = self.replCost
-            E_interpolation_functions[key] = interp1d(IML, exp_loss)
+            E_interpolation_functions[key] = interp1d(IML, exp_loss, fill_value=exp_loss[-1], bounds_error=False)
 
         return E_interpolation_functions
 
@@ -489,22 +521,28 @@ class Loss:
         Computation of EAL
         :param spline: interp1d             1D interpolation function for the expected total loss
         :param hazard: dict                 Hazard function
-        :param method: str                  Calculation method: Porter -> Method 1, other -> applies numpy (technically the same)
+        :param method: str                  Calculation method: Porter -> Method 1, other -> applies numpy
+                                            (technically the same)
         :return: float                      EAL as a % of the total replacement cost
         :return cache: dict                 EAL bins, IML range and MAF for Visualization
         """
-        # IML step of hazard function
-        iml_hazard = np.array(hazard["Sa(T1)"])
-        # Ground shaking Mean annual frequency of exceedance
-        probs = np.array(hazard["MAFE"])
+        try:
+            # IML step of hazard function
+            iml_hazard = np.array(hazard["Sa(T1)"])
+            # Ground shaking Mean annual frequency of exceedance
+            probs = np.array(hazard["MAFE"])
+        except:
+            iml_hazard = hazard[1][int(round(self.period*10))]
+            probs = hazard[2][int(round(self.period*10))]
 
         # Calling the Cost object
         c = Cost(self.nstories)
         if method == "Porter":
             # Loss as the ratio of the replacement cost
-            mdf = spline(iml_hazard)/self.replCost
+            mdf = spline(iml_hazard) / self.replCost
             #  Computing the EAL ratio in %
             eal, cache = c.compute_eal(iml_hazard, probs, mdf, rc=1, method=method)
+
         else:
             # IML
             interpolation = interp1d(iml_hazard, probs)
@@ -532,8 +570,15 @@ if __name__ == "__main__":
     directory = Path.cwd()
     # Loss object Initialization
     # SLFs are already normalized with respect to the building replacement cost
-    l = Loss(calculate_pga_values=False, nrhaFileName=["ancona_x.pickle", "ancona_y.pickle"], rsFileName="RS.pickle",
-             hazardFileName="ancona_hazard.csv", periodsFileName="Periods.tcl", slfFileName="slfsVersion6.pickle",
+    filenameX = directory / "client" / "ancona_x.pickle"
+    filenameY = directory / "client" / "ancona_y.pickle"
+    period = 0.5
+    slfFileName = directory / "client" / "slfsVersion6.pickle"
+    hazardFileName = directory / "client" / "ancona_hazard.csv"
+    rsFileName = directory / "client" / "RS.pickle"
+
+    l = Loss(calculate_pga_values=False, nrhaFileName=[filenameX, filenameY], rsFileName=rsFileName,
+             hazardFileName=hazardFileName, period=period, slfFileName=slfFileName,
              include_demolition=True, non_directional_factor=1.2, collapse=collapse, demolition=demolition,
              replCost=replCost, betas=betas, performSimulations=True, num_realization=1000)
     # Get start time

@@ -52,7 +52,11 @@ class Fitting:
         :return: dict                   Fitting function parameters
         """
         # Take max EDPs of both directions
-        nrhaMax = np.maximum(nrha["x"], nrha["y"])
+        try:
+            nrhaKeys = nrha.keys()
+            nrhaMax = np.maximum(nrha[nrhaKeys[0]], nrha[nrhaKeys[1]])
+        except:
+            nrhaMax = nrha[next(iter(nrha))]
 
         # Get number of variables per each EDP type
         # NRHA array has first columns as PFAs, and then PSDs
@@ -68,30 +72,36 @@ class Fitting:
 
         # Initialize
         edp_max = np.max(nrha) if np.max(nrha) < 10. else 10.
-        iml_max = max(iml_range)
+        iml_max = np.max(iml_range)
 
         edp_max_mod = min(edp_max, use_edp_max)
         iml_max_mod = iml_max
         exceeds = np.array([])
         flats = np.array([])
-        # Get IML order
-        order = iml_range.argsort()
-        iml_range = iml_range[order]
-        iml_range = np.append(iml_range, iml_range[-1])
 
-        for record in range(nr):
+        for rec in range(nr):
+
+            # Get IML order
+            try:
+                order = iml_range[:, rec].argsort()
+                imlRec = iml_range[:, rec][order]
+            except:
+                order = iml_range.argsort()
+                imlRec = iml_range[order]
+            imlRec = np.append(imlRec, imlRec[-1])
+
             # Get EDP range for each simulation/record
-            edp = nrha[:, record]
+            edp = nrha[:, rec]
             # Sort EDPs by IML order
             edp = edp[order]
             # Flatline
             edp = np.append(edp, edp_max_mod)
 
             # Create a spline of edp vs iml
-            spline = self.spline(edp, iml_range)
+            spline = self.spline(edp, imlRec)
             edp_news = spline["edp_spline"]
             iml_news = spline["iml_spline"]
-            slope_init = iml_range[1] / edp[1]
+            slope_init = imlRec[1] / edp[1]
             slopes = np.diff(iml_news) / np.diff(edp_news)
             flat_idx = np.where(slopes == slopes[(slopes < flat_slope * slope_init) & (slopes > 0) &
                                                  (slopes != np.inf)][0])[0][0]
@@ -152,7 +162,8 @@ class Fitting:
         if ls_cov is None:
             ls_cov = 0.3
 
-        iml_max = max(iml_range)
+        # Get the maximum IML recorded
+        iml_max = np.max(iml_range)
 
         # Update IML range if the maximum selected is lower than the actual values obtained
         if max(iml_ext) <= iml_max:
@@ -163,20 +174,26 @@ class Fitting:
         # Demolition probabilities initialization
         p_demol_final = np.array([])
         iml_demol_final = iml_news_all[iml_news_all <= iml_max]
-        iml_range = np.insert(iml_range, 0, 0)
-        order = iml_range.argsort()
-        iml_range = iml_range[order]
 
+        num_recs = ridr.shape[1]
         for iml_test in iml_news_all:
 
             if iml_test <= iml_max:
                 # Vector to populate if the limit state is exceeded
                 exceeds = np.array([])
-                for record in range(ridr.shape[1]):
-                    edp = ridr[:, record]
+                for rec in range(num_recs):
+                    # Get IML range recorded
+                    try:
+                        imlRec = np.insert(iml_range[:, rec], 0, 0)
+                    except:
+                        imlRec = np.insert(iml_range, 0, 0)
+                    order = imlRec.argsort()
+                    imlRec = imlRec[order]
+
+                    edp = ridr[:, rec]
                     edp = np.insert(edp, 0, 0)
                     edp = edp[order]
-                    spline = interp1d(iml_range, edp)
+                    spline = interp1d(imlRec, edp)
 
                     try:
                         edp_exceed = float(spline(iml_test))
@@ -185,7 +202,7 @@ class Fitting:
                         pass
                 edp_min = min(exceeds)
                 edp_max = max(exceeds)
-                num_recs = len(exceeds)
+
                 counts = np.array([])
                 edp_news = np.linspace(0, edp_max * 1.5, 200)[1:]
                 for edp_new in edp_news:
@@ -245,18 +262,35 @@ class Fitting:
         nrha[1:, :, :] = results
 
         # IML range
-        iml_range = np.insert(iml_range, 0, 0)
-        order = iml_range.argsort()
-        iml_range = iml_range[order]
+        try:
+            iml = np.zeros((iml_range.shape[0] + 1, iml_range.shape[1]))
+            iml[1:, :] = iml_range
+            order = np.argsort(iml)
+            iml_range = np.array(list(map(lambda x, y: y[x], order, iml)))
+            # Get the EDP ranges that exceed the test IML for a given storey
+            edp = nrha[:, :, story - 1]
+            edp = np.array(list(map(lambda x, y: y[x], order, edp)))
+        except:
+            iml_range = np.insert(iml_range, 0, 0)
+            order = iml_range.argsort()
+            iml_range = iml_range[order]
+            # Get the EDP ranges that exceed the test IML for a given storey
+            edp = nrha[:, :, story - 1]
+            edp = edp[order]
 
-        if iml_test > max(iml_range):
-            iml_test = max(iml_range)
+        if iml_test > np.max(iml_range):
+            iml_test = np.max(iml_range)
 
-        # Get the EDP ranges that exceed the test IML for a given storey
-        edp = nrha[:, :, story - 1]
-        edp = edp[order]
-        spline = interp1d(iml_range, edp, axis=0)
-        exceeds = spline(iml_test)
+        try:
+            spline = []
+            exceeds = np.zeros((iml_range.shape[1], ))
+            for rec in range(iml_range.shape[1]):
+                spl = interp1d(iml_range[:, rec], edp[:, rec], fill_value=max(edp[:, rec]), axis=0, bounds_error=False)
+                spline.append(spl)
+                exceeds[rec] = spl(iml_test)
+        except:
+            spline = interp1d(iml_range, edp, axis=0)
+            exceeds = spline(iml_test)
 
         edp_max = max(exceeds)
         num_recs = len(exceeds)

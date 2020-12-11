@@ -5,21 +5,16 @@ from pathlib import Path
 
 
 class SaT1:
-    def __init__(self, rs_path, periods_path, ida_path):
+    def __init__(self, rs_path, period, ida):
         """
         :param rs_path: str                     Path of the response spectra
-        :param periods_path: str                Path of the file containing info on fundamental periods for each case
-        :param ida_path: str                    Path of the IDA outputs
+        :param period: float                    Fundamental period of the structure
+        :param ida: str                         IDA outputs
         """
         # Get response spectra and periods and IDA outputs
         self.response_spectra = pd.read_pickle(rs_path)
-        self.periods = pd.read_csv(periods_path, index_col=None)
-        pickle_file = open(ida_path, 'rb')
-        self.ida = pickle.load(pickle_file)
-        pickle_file.close()
-
-        # Get fundamental period of the case
-        self.T1 = float(self.periods.iloc[0])
+        self.period = period
+        self.ida = ida
 
     def calc_SaT1_mean(self):
         """
@@ -27,7 +22,7 @@ class SaT1:
         :return: float                          Spectral Acceleration at T1
         """
         # Get SaT1
-        SaT1 = float(self.response_spectra[self.response_spectra['T1'].round(2) == round(self.T1, 2)].loc[:,
+        SaT1 = float(self.response_spectra[self.response_spectra['T1'].round(2) == round(self.period, 2)].loc[:,
                      self.response_spectra.columns != 'T1'].mean(axis=1))
         return SaT1
 
@@ -39,16 +34,18 @@ class SaT1:
         """
         # Copy the ida outputs
         results_mod = self.ida.copy()
-        for record in self.ida['summary_results'].keys():
-            # Get scaled PGA value
-            PGA_scaled = float(self.response_spectra[self.response_spectra['T1'] == 0.00][record])
-            # Get SaT1
-            SaT1 = float(self.response_spectra[self.response_spectra['T1'].round(2) == round(self.T1, 2)][record])
-            # For each intensity measure level
-            for iml in sorted(self.ida['summary_results'][record].keys()):
-                IDAfact = round(float(iml) / SaT1, 5)
-                PGA_scaled_IDA = IDAfact * PGA_scaled
-                results_mod['summary_results'][record][iml]['maxFA'][0] = PGA_scaled_IDA
+        for key in self.ida.keys():
+            for record in self.ida[key]['summary_results'].keys():
+                # Get scaled PGA value
+                PGA_scaled = float(self.response_spectra[self.response_spectra['T1'] == 0.00][record])
+                # Get SaT1
+                SaT1 = float(self.response_spectra[self.response_spectra['T1'].round(2) ==
+                                                   round(self.period, 2)][record])
+                # For each intensity measure level
+                for iml in sorted(self.ida[key]['summary_results'][record].keys()):
+                    IDAfact = round(float(iml) / SaT1, 5)
+                    PGA_scaled_IDA = IDAfact * PGA_scaled
+                    results_mod[key]['summary_results'][record][iml]['maxFA'][0] = PGA_scaled_IDA
         return results_mod
 
     def calc_gamma(self, return_period):
@@ -70,4 +67,4 @@ if __name__ == "__main__":
     file = directory.parents[0] / "client" / "ida_case1.pickle"
 
     run = SaT1(rs_path, periods_path, file)
-    SaT1 = run.calc_SaT1_mean()
+    sat1 = run.calc_SaT1_mean()

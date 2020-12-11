@@ -17,7 +17,7 @@ class Cost:
         # TODO, make edp ranges more generic; actual story-loss functions might not be within the range, so it might
         #  give an error
         self.idr = np.linspace(0, 20.0, 1001)[1:]
-        self.acc = np.linspace(0, 10, 1001)[1:]
+        self.acc = np.linspace(0, 10.0, 1001)[1:]
         self.slf_filename = slf_filename
         self.include_demolition = include_demolition
         self.nonDirFactor = nonDirFactor
@@ -34,8 +34,10 @@ class Cost:
         
         # Get max demand and multiply by nonDirFactor
         dKeys = list(nrha.keys())
-
-        nrha = np.maximum(nrha[dKeys[0]], nrha[dKeys[1]]) * nonDirFactor
+        try:
+            nrha = np.maximum(nrha[dKeys[0]], nrha[dKeys[1]]) * nonDirFactor
+        except:
+            nrha = nrha[dKeys[0]] * nonDirFactor
         return nrha
 
     def get_drift_sensitive_losses(self, nrha, story, iml, iml_range, interpolation, directionality=False,
@@ -67,11 +69,14 @@ class Cost:
             p_edp = p_edp / sum(p_edp)
             
             # Apply interpolation
+            cost_sd = None
+            cost_nsd = None
             for edp in interpolation[direction_tag].keys():
-                if edp.lower() == "idr_s" or edp.lower() == "s":
+                if edp.lower() == "idr_s" or edp.lower() == "s" or edp.lower() == "psd_s":
                     cost_sd = sum(interpolation[direction_tag][edp][direction][story](self.idr / 100) * p_edp)
-                elif edp.lower() == "idr_ns" or edp.lower() == "ns":
+                elif edp.lower() == "idr_ns" or edp.lower() == "ns" or edp.lower() == "psd_ns":
                     cost_nsd = sum(interpolation[direction_tag][edp][direction][story](self.idr / 100) * p_edp)
+
             return cost_sd, cost_nsd
 
         else:
@@ -85,10 +90,12 @@ class Cost:
             p_edp = p_edp / sum(p_edp)
             
             # Apply interpolation
+            cost_sd = None
+            cost_nsd = None
             for edp in interpolation[direction_tag].keys():
-                if edp.lower() == "idr_s" or edp.lower() == "s":
+                if edp.lower() == "idr_s" or edp.lower() == "s" or edp.lower() == "psd_s":
                     cost_sd = sum(interpolation[direction_tag][edp][story](self.idr / 100) * p_edp)
-                elif edp.lower() == "idr_ns" or edp.lower() == "ns":
+                elif edp.lower() == "idr_ns" or edp.lower() == "ns" or edp.lower() == "psd_ns":
                     cost_nsd = sum(interpolation[direction_tag][edp][story](self.idr / 100) * p_edp)
 
             # Storing the already modified IDA results to be used for the PFA-sensitive non-directional components
@@ -126,9 +133,11 @@ class Cost:
         Calculates expected losses based on provided storey-loss functions
         :param nrhaOutputs: dict                    NRHA outputs
         :param ridr: array                          Residual drifts
-        :param iml_range: list                      IML range
-        :param collapse: dict                       Median and dispersion of collapse fragility function, or None if needs to be computed
-        :param demolition: dict                     Median and dispersion of dispersion fragility function, or None if default is used
+        :param iml_range: ndarray                   IML range
+        :param collapse: dict                       Median and dispersion of collapse fragility function, or None if
+                                                    needs to be computed
+        :param demolition: dict                     Median and dispersion of dispersion fragility function, or None if
+                                                    default is used
         :param use_beta_MDL: float                  Standard deviation accounting for modelling uncertainty to use
         :param replCost: float                      Replacement cost of the building
         :return: dict                               Calculated losses
@@ -152,12 +161,13 @@ class Cost:
 
         # IML range extended
         # TODO, possibly modify condition to just use original iml_range (have option to use original IML or this)
-        iml_ext = np.arange(0.05, 2.0 + 0.05, 0.05)
+        iml_ext = np.arange(0.05, 3.0 + 0.05, 0.05)
 
         loss_results = pd.DataFrame(columns=df_headers, index=['%.2f' % i for i in iml_ext])
 
         # Call the Fitting object
         f = Fitting()
+
         # Collapse losses
         if collapse is None:
             # TODO, currently based on max, to be modified to be based on the average of both x and y demands
@@ -172,7 +182,7 @@ class Cost:
             beta_col = collapse['beta']
             p_collapse = stats.norm.cdf(np.log(iml_ext / theta_col) / beta_col, loc=0, scale=1)
             loss_results['C'] = p_collapse
-        
+
         # Demolition losses given no collapse - P(D|NC,IM)
         if demolition is None:
             ls_median = None
@@ -189,12 +199,12 @@ class Cost:
             loss_results['D'] = p_demol
         else:
             loss_results['D'] = 0
-        
+
         # Getting the SLFs
         slf = SLF(self.slf_filename, self.nstories)
         slf_functions = slf.provided_slf()
         interpolation_functions = slf.get_interpolation_functions(slf_functions)
-        
+
         # Repair losses
         # Loop for each intensity measure level (IML)
         for iml in iml_ext:
@@ -223,7 +233,6 @@ class Cost:
                         temp = self.get_drift_sensitive_losses(nrha_non_dir[:, :, self.nstories + 1:], story, iml,
                                                                iml_range, interpolation_functions)
 
-
                         story_loss_ratio_idr_sd += temp[0]
                         story_loss_ratio_idr_nsd += temp[1]
 
@@ -242,13 +251,16 @@ class Cost:
                             else:
                                 direction = "dir2"
 
+                            if len(nrhaOutputs.keys()) == 1:
+                                direction = "dir1"
+
                             temp = self.get_drift_sensitive_losses(nrhaOutputs[key][:, :, self.nstories + 1:], story,
                                                                    iml, iml_range, interpolation_functions,
                                                                    directionality=True, direction=direction)
-                            
+
                             story_loss_ratio_idr_sd += temp[0]
                             story_loss_ratio_idr_nsd += temp[1]
-                
+
                 # Record current repair story losses per component group
                 r_isdr_sd = story_loss_ratio_idr_sd
                 r_isdr_nsd = story_loss_ratio_idr_nsd
