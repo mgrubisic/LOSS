@@ -45,7 +45,7 @@ class Fitting:
         Calculate a IMLvsPoE fragility for the collapse limit state
         :param nrha: dict               IDA outputs
         :param nstories: int            Number of stories
-        :param iml_range: array               IML range
+        :param iml_range: array         IML range
         :param flat_slope: float        Flattening slope
         :param use_edp_max: float       EDP max to use
         :param use_beta_MDL: float      Standard deviation accounting for modelling uncertainty to use

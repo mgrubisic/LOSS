@@ -15,13 +15,11 @@ from tools.visualize import Visualize
 # TODO, add loss curve, PV estimations
 class Loss:
     def __init__(self, directory=None, nrhaFileName=None, rsFileName=None, period=None, slfFileName=None,
-                 hazardFileName=None, calculate_pga_values=False, include_demolition=True,
-                 non_directional_factor=1.0, collapse=None, use_beta_MDL=0.15,
-                 demolition=None, replCost=1.0, betas=None, performSimulations=False, num_realization=1000,
-                 iml_range_consistent=False):
+                 hazardFileName=None, calculate_pga_values=False, include_demolition=True, non_directional_factor=1.0,
+                 collapse=None, use_beta_MDL=0.15, demolition=None, replCost=1.0, betas=None, performSimulations=False,
+                 num_realization=1000, iml_range_consistent=False):
         """
         Initialize Loss estimation framework based on story-loss functions
-        TODO, works only when the IML range is the same for all records, add option to do interpolation, if otherwise
         :param directory: str                           Main working directory
         :param nrhaFileName: str                        Incremental dynamic analysis (IDA) filename
         :param rsFileName: str                          Scaled Response spectra (RS) file name
@@ -76,7 +74,7 @@ class Loss:
         self.non_directional_factor = non_directional_factor
 
         # Initialize number of stories
-        self.nstories = None
+        self.n_stories = None
 
         # Collapse CDF parameters
         self.collapse = collapse
@@ -302,7 +300,7 @@ class Loss:
 
     def read_input(self):
         """
-        NOTE: TODO: The keys will vary for other input files (might be MSA instead of IDA)
+        NOTE: The keys will vary for other input files (might be MSA instead of IDA)
         Reads the inputs for the loss assessment
         IDA: summary_results:   IM is in [g]
                                 maxFA is in [g]
@@ -343,7 +341,12 @@ class Loss:
                 nrha_file = open(self.nrhaFileName, "rb")
                 ida_temp = pickle.load(nrha_file)
                 nrha_file.close()
-                nrhaTemp["IDAs"] = ida_temp
+                if len(ida_temp.keys()) > 1:
+                    # 3D model is being considered within a single file
+                    for key in ida_temp.keys():
+                        nrhaTemp[key] = ida_temp[key]
+                else:
+                    nrhaTemp["IDAs"] = ida_temp
 
         # Reading of the RS file
         rs = None
@@ -377,8 +380,10 @@ class Loss:
             for j in nrhaTemp[key]["summary_results"][i].keys():
                 for k in nrhaTemp[key]["summary_results"][i][j].keys():
                     for m in nrhaTemp[key]["summary_results"][i][j].get(k):
-                        self.nstories = m
-                    break
+                        self.n_stories = m
+                    if k != "maxFA":
+                        # Sometimes maxFA key might not include the PGA value, hence stories might be read incorrectly
+                        break
                 break
             break
 
@@ -395,7 +400,9 @@ class Loss:
         else:
             # Get ndarray of IML range for each record
             keygm = next(iter(nrhaTemp[key]["IDA"]))
+
             self.iml_range = np.zeros((len(nrhaTemp[key]["IDA"][keygm]["IM"]), len(nrhaTemp[key]["IDA"])))
+
             cnt = 0
             for rec in nrhaTemp[key]["IDA"].keys():
                 # "IDA" is not sorted, while "summary_results" are sorted, and since EDPs will be read from
@@ -429,7 +436,7 @@ class Loss:
         # Get residual drifts (based only on one direction)
         ridr = self.get_residuals(nrhaTemp[key]["IDA"], sorting=sortingRIDR)
 
-        return {"NRHA": nrha, "residuals": ridr, "RS": rs, "Hazard": hazard, "Nstories": self.nstories}
+        return {"NRHA": nrha, "residuals": ridr, "RS": rs, "Hazard": hazard, "Nstories": self.n_stories}
 
     def calc_losses(self, nrhaOutputs, ridr):
         """
@@ -440,24 +447,23 @@ class Loss:
         :param ridr: array                          Residual drifts
         :return: dict                               Computed, disaggregated and total losses
         """
-        # Get client directory
-        clientDirectory = self.directory / "client"
-
         cost = None
         if self.slfFileName is None:
+            # Get client directory
+            clientDirectory = self.directory / "client"
             for file in os.listdir(clientDirectory):
                 if file.startswith("slf") or file.startswith("SLF"):
-                    cost = Cost(self.nstories, slf_filename=clientDirectory / file,
+                    cost = Cost(self.n_stories, slf_filename=clientDirectory / file,
                                 include_demolition=self.include_demolition, nonDirFactor=self.non_directional_factor)
                     self.slfFileName = clientDirectory / file
                 else:
                     raise ValueError("[EXCEPTION] SLFs are missing!")
         else:
-            cost = Cost(self.nstories, slf_filename=self.slfFileName, include_demolition=self.include_demolition,
+            cost = Cost(self.n_stories, slf_filename=self.slfFileName, include_demolition=self.include_demolition,
                         nonDirFactor=self.non_directional_factor)
         
         losses = cost.calc_losses(nrhaOutputs, ridr, self.iml_range, collapse=self.collapse,
-                                  use_beta_MDL=self.use_beta_MDL, demolition=self.demolition, replCost=self.replCost)
+                                  use_beta_mdl=self.use_beta_MDL, demolition=self.demolition, repl_cost=self.replCost)
         return losses
 
     def loss_ratios(self, losses, demolition_threshold=0.6):
@@ -532,11 +538,11 @@ class Loss:
             # Ground shaking Mean annual frequency of exceedance
             probs = np.array(hazard["MAFE"])
         except:
-            iml_hazard = hazard[1][int(round(self.period*10))]
-            probs = hazard[2][int(round(self.period*10))]
+            iml_hazard = hazard[1][int(round(self.period * 10))]
+            probs = hazard[2][int(round(self.period * 10))]
 
         # Calling the Cost object
-        c = Cost(self.nstories)
+        c = Cost(self.n_stories)
         if method == "Porter":
             # Loss as the ratio of the replacement cost
             mdf = spline(iml_hazard) / self.replCost
@@ -557,8 +563,6 @@ class Loss:
 
 if __name__ == "__main__":
 
-    # TODO, rsFileName being used when? Update file
-    #  slf_normalization being used when?
     # Inputs
     collapse = {"theta": 1.49, "beta": 0.33}
     demolition = {"median": 0.015, "cov": 0.30}
@@ -580,12 +584,13 @@ if __name__ == "__main__":
     l = Loss(calculate_pga_values=False, nrhaFileName=[filenameX, filenameY], rsFileName=rsFileName,
              hazardFileName=hazardFileName, period=period, slfFileName=slfFileName,
              include_demolition=True, non_directional_factor=1.2, collapse=collapse, demolition=demolition,
-             replCost=replCost, betas=betas, performSimulations=True, num_realization=1000)
+             replCost=replCost, betas=betas, performSimulations=False, num_realization=1000)
     # Get start time
     start_time = l.get_init_time()
 
     # Read the inputs of the framework
     inputs = l.read_input()
+
     # Calculate losses
     loss = l.calc_losses(inputs["NRHA"], inputs["residuals"])
     # Calculate loss ratios

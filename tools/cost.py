@@ -67,7 +67,6 @@ class Cost:
             edp_beta = frag_calc['beta']
             p_edp = stats.norm.pdf(np.log(self.idr / edp_theta) / edp_beta, loc=0, scale=1)
             p_edp = p_edp / sum(p_edp)
-            
             # Apply interpolation
             cost_sd = None
             cost_nsd = None
@@ -128,7 +127,7 @@ class Cost:
         cost = story_loss_ratio_acc_partial
         return cost
 
-    def calc_losses(self, nrhaOutputs, ridr, iml_range, collapse=None, demolition=None, use_beta_MDL=0.15, replCost=1):
+    def calc_losses(self, nrhaOutputs, ridr, iml_range, collapse=None, demolition=None, use_beta_mdl=.15, repl_cost=1.):
         """
         Calculates expected losses based on provided storey-loss functions
         :param nrhaOutputs: dict                    NRHA outputs
@@ -138,8 +137,8 @@ class Cost:
                                                     needs to be computed
         :param demolition: dict                     Median and dispersion of dispersion fragility function, or None if
                                                     default is used
-        :param use_beta_MDL: float                  Standard deviation accounting for modelling uncertainty to use
-        :param replCost: float                      Replacement cost of the building
+        :param use_beta_mdl: float                  Standard deviation accounting for modelling uncertainty to use
+        :param repl_cost: float                     Replacement cost of the building
         :return: dict                               Calculated losses
         """
         """
@@ -152,7 +151,7 @@ class Cost:
         nrha_non_dir = self.get_non_dir_nrha_results(nrhaOutputs)
 
         # Initialize loss DataFrame with appropriate headers
-        df_headers = ['C', 'D']
+        df_headers = ['IML', 'C', 'D']
         df_headers_storey = ['_R_ISDR_SD', '_R_ISDR_NSD', '_R_ISDR_TOTAL', '_R_PFA', '_R_TOTAL']
         for story in np.arange(1, self.nstories + 1, 1):
             for idx in range(len(df_headers_storey)):
@@ -160,18 +159,19 @@ class Cost:
         df_headers += ['R_ISDR_SD_TOTAL', 'R_ISDR_NSD_TOTAL', 'R_ISDR_TOTAL_TOTAL', 'R_PFA_TOTAL', 'R_TOTAL_TOTAL']
 
         # IML range extended
-        # TODO, possibly modify condition to just use original iml_range (have option to use original IML or this)
-        iml_ext = np.arange(0.05, 3.0 + 0.05, 0.05)
+        iml_ext = np.arange(0.05, 3.5 + 0.05, 0.05)
 
         loss_results = pd.DataFrame(columns=df_headers, index=['%.2f' % i for i in iml_ext])
 
+        loss_results['IML'] = iml_ext
+        
         # Call the Fitting object
         f = Fitting()
 
         # Collapse losses
         if collapse is None:
-            # TODO, currently based on max, to be modified to be based on the average of both x and y demands
-            frag_calc = f.calc_collapse_fragility(nrhaOutputs, self.nstories, iml_range, use_beta_MDL=use_beta_MDL)
+            # currently based on max, to be modified to be based on the average of both x and y demands
+            frag_calc = f.calc_collapse_fragility(nrhaOutputs, self.nstories, iml_range, use_beta_MDL=use_beta_mdl)
             theta_col = frag_calc['theta']
             beta_col = frag_calc['beta']
             p_collapse = stats.norm.cdf(np.log(iml_ext / theta_col) / beta_col, loc=0, scale=1)
@@ -197,6 +197,7 @@ class Cost:
             beta_dem = frag_calc['beta']
             p_demol = stats.norm.cdf(np.log(iml_ext / theta_dem) / beta_dem, loc=0, scale=1)
             loss_results['D'] = p_demol
+
         else:
             loss_results['D'] = 0
 
@@ -307,9 +308,9 @@ class Cost:
         # Non-collapse, non-demolition
         loss_results['E_NC_ND'] = loss_results['E_NC_ND_S'] + loss_results['E_NC_ND_NS']
         # Non-collapse, demolition
-        loss_results['E_NC_D'] = loss_results['D'] * (1 - loss_results['C']) * replCost
+        loss_results['E_NC_D'] = loss_results['D'] * (1 - loss_results['C']) * repl_cost
         # Collapse
-        loss_results['E_C'] = loss_results['C'] * replCost
+        loss_results['E_C'] = loss_results['C'] * repl_cost
         # Total losses, i.e. non-collapse, non-demolition + non-collapse, demolition + collapse
         loss_results['E_LT'] = loss_results['E_NC_ND'] + 1 * loss_results['E_NC_D'] + 1 * loss_results['E_C']
 
