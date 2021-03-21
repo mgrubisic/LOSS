@@ -12,3 +12,5 @@ temp.py
 tools/__pycache__/*
 venv/*
 Data Visualization/*
+runMain2D.py
+runMain.py

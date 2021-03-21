@@ -291,6 +291,7 @@ class Loss:
         cnt = 0
         for gm in demands:
             data = demands[gm]["RISDR"]
+
             if sorting:
                 order = np.argsort(demands[gm]["IM"])
                 data = data[order]
@@ -346,7 +347,10 @@ class Loss:
                     for key in ida_temp.keys():
                         nrhaTemp[key] = ida_temp[key]
                 else:
-                    nrhaTemp["IDAs"] = ida_temp
+                    try:
+                        nrhaTemp["IDAs"] = ida_temp[0]
+                    except:
+                        nrhaTemp["IDAs"] = ida_temp
 
         # Reading of the RS file
         rs = None
@@ -386,7 +390,6 @@ class Loss:
                         break
                 break
             break
-
         # Check whether peak ground acceleration (PGA) values are provided, if not, calculate them
         if self.calculate_pga_values:
             nrhaTemp = self.calc_PGA(nrhaTemp)
@@ -444,7 +447,8 @@ class Loss:
                                                     PFA is in [g]
         Calculates losses based on SLFs
         :param nrhaOutputs: dict                    NRHA outputs (two 3D arrays)
-        :param ridr: array                          Residual drifts
+        :param ridr: array                          Residual drifts, make sure to provide consistent outputs with
+                                                    demolition fragility function
         :return: dict                               Computed, disaggregated and total losses
         """
         cost = None
@@ -577,7 +581,7 @@ if __name__ == "__main__":
     filenameX = directory / "client" / "ancona_x.pickle"
     filenameY = directory / "client" / "ancona_y.pickle"
     period = 0.5
-    slfFileName = directory / "client" / "slfsVersion6.pickle"
+    slfFileName = directory / "client" / "slfs.pickle"
     hazardFileName = directory / "client" / "ancona_hazard.csv"
     rsFileName = directory / "client" / "RS.pickle"
 
@@ -601,7 +605,7 @@ if __name__ == "__main__":
     # Data visualization
     # EAL visualization
     sflag = False
-    pflag = False
+    pflag = True
     v = Visualize()
     cache_eal = v.plot_eal(cache, loss, pflag=pflag, sflag=sflag, replCost=replCost)
     # Loss curves, vulnerability curves

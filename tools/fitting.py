@@ -80,7 +80,6 @@ class Fitting:
         flats = np.array([])
 
         for rec in range(nr):
-
             # Get IML order
             try:
                 order = iml_range[:, rec].argsort()
@@ -103,8 +102,12 @@ class Fitting:
             iml_news = spline["iml_spline"]
             slope_init = imlRec[1] / edp[1]
             slopes = np.diff(iml_news) / np.diff(edp_news)
-            flat_idx = np.where(slopes == slopes[(slopes < flat_slope * slope_init) & (slopes > 0) &
-                                                 (slopes != np.inf)][0])[0][0]
+            try:
+                flat_idx = np.where(slopes == slopes[(slopes < flat_slope * slope_init) & (slopes > 0) &
+                                                     (slopes != np.inf)][0])[0][0]
+            except:
+                flat_idx = len(iml_news) - 1
+                print(f"[WARNING] IDA for record {rec} not flatlining")
 
             flat_iml = iml_news[flat_idx - 1]
             flat_edp = edp_news[flat_idx - 1]
