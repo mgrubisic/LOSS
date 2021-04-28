@@ -11,14 +11,20 @@ warnings.filterwarnings('ignore')
 
 
 class SLF:
-    def __init__(self, fileName, nstories):
+    def __init__(self, fileName, nstories, repl_cost=1., flag3d=True, normalize=False):
         """
         initialize storey loss function definition
         :param fileName: dict                       SLF data file
         :param nstories: int                        Number of stories
+        :param repl_cost: float                     Replacement cost
+        :param flag3d: bool                         3D or 2D modelling
+        :param normalize: bool                      Normalize SLFs by replacement cost
         """
         self.fileName = fileName
         self.nstories = nstories
+        self.repl_cost = repl_cost
+        self.flag3d = flag3d
+        self.normalize = normalize
         if str(fileName).endswith("xlsx"):
             # Not recommended
             self.flag = False
@@ -53,11 +59,11 @@ class SLF:
             df["E_S_IDR"] = df["E_S_IDR"] * max_s_psd / max(y_s_psd_range) * storey_loss_ratio_weight
             
         else:
-            # SLFs that accounts for the whole building inventory in a 3D space
+            # SLFs that accounts for the whole building inventory in a 3D space (unscaled)
             file = open(filename, "rb")
             df = pickle.load(file)
             file.close()
-            
+
         return df
     
     def get_interpolation_functions(self, df):
@@ -71,6 +77,7 @@ class SLF:
         """
         interpolation_functions = {}
         if not self.flag:
+            # TODO, add normalization for csv option
             # Not recommended, to be removed in future updates, or be updated not to be so underwhelming
             for key in df:
                 if key.startswith("E_"):
@@ -85,6 +92,30 @@ class SLF:
                     # Append into interpolation functions
                     interpolation_functions[f"{key[-3:]}_{component_type}"] = interp1d(edp_temp, slf_temp)
         else:
+            # Normalize SLFs by the replacement cost
+            # print(df["Non-directional"]["PFA_NS"]["0"]["loss"])
+            total_comp_cost = 0
+            for d in df:
+                for key in df[d]:
+                    if d == "Non-directional":
+                        for i in df[d][key].keys():
+                            total_comp_cost += max(df[d][key][i]["loss"])
+                            # print(d, key, i, df[d][key][i]["loss"])
+                    else:
+                        if self.flag3d:
+                            directions = ["dir1", "dir2"]
+                        else:
+                            # Does not consider costs associated with components sensitive along 2nd direction
+                            directions = ["dir1"]
+                        for x in directions:
+                            for i in df[d][key][x]:
+                                total_comp_cost += max(df[d][key][x][i]["loss"])
+
+            if self.normalize:
+                factor = self.repl_cost / total_comp_cost
+            else:
+                factor = 1.
+
             # Looping through directionality type
             for d in df:
                 interpolation_functions[d] = {}
@@ -101,7 +132,7 @@ class SLF:
                             df[d][key][i]["loss"][df[d][key][i]["loss"] < 0] = 0.0
                             
                             slf_temp = np.insert(df[d][key][i]["loss"], 0, 0)
-                            interpolation_functions[d][key][int(i[-1])] = interp1d(edp_temp, slf_temp)
+                            interpolation_functions[d][key][int(i[-1])] = interp1d(edp_temp, slf_temp * factor)
                     # IDR-sensitive components
                     else:
                         # Loop for each direction, 1 and 2, x or y
@@ -111,7 +142,8 @@ class SLF:
                             for i in df[d][key][x]:
                                 edp_temp = np.insert(df[d][key][x][i]["edp"], 0, 0)
                                 slf_temp = np.insert(df[d][key][x][i]["loss"], 0, 0)
-                                interpolation_functions[d][key][x][int(i[-1])] = interp1d(edp_temp, slf_temp)
+
+                                interpolation_functions[d][key][x][int(i[-1])] = interp1d(edp_temp, slf_temp * factor)
 
         return interpolation_functions
 

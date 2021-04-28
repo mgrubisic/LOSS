@@ -17,7 +17,7 @@ class Loss:
     def __init__(self, directory=None, nrhaFileName=None, rsFileName=None, period=None, slfFileName=None,
                  hazardFileName=None, calculate_pga_values=False, include_demolition=True, non_directional_factor=1.0,
                  collapse=None, use_beta_MDL=0.15, demolition=None, replCost=1.0, betas=None, performSimulations=False,
-                 num_realization=1000, iml_range_consistent=False):
+                 num_realization=1000, iml_range_consistent=False, flag3d=True, normalize=False):
         """
         Initialize Loss estimation framework based on story-loss functions
         :param directory: str                           Main working directory
@@ -42,6 +42,8 @@ class Loss:
         :param num_realization: int                     Number of realizations
         :param iml_range_consistent: bool               If True derives IML range (same for each record), else uses IML
                                                         range different for each record
+        :param flag3d: bool                             3D or 2D modelling
+        :param normalize: bool                          Normalize SLFs by replacement cost
         """
         # Set the main directory
         if directory is None:
@@ -102,6 +104,12 @@ class Loss:
 
         # IML consistency
         self.iml_range_consistent = iml_range_consistent
+
+        # Mode of modelling
+        self.flag3d = flag3d
+
+        # Normalization flag
+        self.normalize = normalize
 
     @staticmethod
     def get_init_time():
@@ -436,6 +444,9 @@ class Loss:
         else:
             nrha = nrhaOutputs
 
+        with open(self.nrhaFileName.parents[0] / "nrhaCache.pickle", "wb") as f:
+            pickle.dump(nrha, f, pickle.HIGHEST_PROTOCOL)
+
         # Get residual drifts (based only on one direction)
         ridr = self.get_residuals(nrhaTemp[key]["IDA"], sorting=sortingRIDR)
 
@@ -466,8 +477,9 @@ class Loss:
             cost = Cost(self.n_stories, slf_filename=self.slfFileName, include_demolition=self.include_demolition,
                         nonDirFactor=self.non_directional_factor)
         
-        losses = cost.calc_losses(nrhaOutputs, ridr, self.iml_range, collapse=self.collapse,
-                                  use_beta_mdl=self.use_beta_MDL, demolition=self.demolition, repl_cost=self.replCost)
+        losses = cost.calc_losses(nrhaOutputs, ridr, self.iml_range, collapse=self.collapse, flag3d=self.flag3d,
+                                  use_beta_mdl=self.use_beta_MDL, demolition=self.demolition, repl_cost=self.replCost,
+                                  normalize=self.normalize)
         return losses
 
     def loss_ratios(self, losses, demolition_threshold=0.6):
@@ -559,7 +571,7 @@ class Loss:
             iml = np.arange(iml_hazard[0], iml_hazard[-1], 0.01)
             l = interpolation(iml)
             # Loss as the ratio of the replacement cost
-            mdf = spline(iml)/self.replCost
+            mdf = spline(iml) / self.replCost
             #  Computing the EAL ratio in %
             eal, cache = c.compute_eal(iml, probs, mdf, rc=1, method=method)
         return eal, cache

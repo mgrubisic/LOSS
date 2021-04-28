@@ -60,7 +60,6 @@ class Cost:
         # Check directionality of component groups
         if directionality:
             direction_tag = "Directional"
-
             # Probabilities of exceedance
             frag_calc = f.calc_p_edp_given_im(nrha, story, iml, iml_range)
             edp_theta = frag_calc['theta']
@@ -127,7 +126,8 @@ class Cost:
         cost = story_loss_ratio_acc_partial
         return cost
 
-    def calc_losses(self, nrhaOutputs, ridr, iml_range, collapse=None, demolition=None, use_beta_mdl=.15, repl_cost=1.):
+    def calc_losses(self, nrhaOutputs, ridr, iml_range, collapse=None, demolition=None, use_beta_mdl=.15, repl_cost=1.,
+                    flag3d=True, normalize=False):
         """
         Calculates expected losses based on provided storey-loss functions
         :param nrhaOutputs: dict                    NRHA outputs
@@ -139,6 +139,8 @@ class Cost:
                                                     default is used
         :param use_beta_mdl: float                  Standard deviation accounting for modelling uncertainty to use
         :param repl_cost: float                     Replacement cost of the building
+        :param flag3d: bool                         3D or 2D morelling
+        :param normalize: bool                      Normalize SLFs by replacement cost
         :return: dict                               Calculated losses
         """
         """
@@ -190,7 +192,7 @@ class Cost:
         else:
             ls_median = demolition["median"]
             ls_cov = demolition["cov"]
-            
+
         if self.include_demolition:
             frag_calc = f.calc_demolition_fragility(ridr, iml_range, iml_ext, ls_median=ls_median, ls_cov=ls_cov)
             theta_dem = frag_calc['theta']
@@ -202,7 +204,7 @@ class Cost:
             loss_results['D'] = 0
 
         # Getting the SLFs
-        slf = SLF(self.slf_filename, self.nstories)
+        slf = SLF(self.slf_filename, self.nstories, repl_cost=repl_cost, flag3d=flag3d, normalize=normalize)
         slf_functions = slf.provided_slf()
         interpolation_functions = slf.get_interpolation_functions(slf_functions)
 
