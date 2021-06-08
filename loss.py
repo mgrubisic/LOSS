@@ -516,18 +516,6 @@ class Loss:
         # Applying the demolition threshold, beyond which complete loss is assumed
         E_LT[E_LT >= demolition_threshold*self.replCost] = self.replCost
 
-        # Interpolation functions
-        E_NC_ND_ISDR_S_spline = interp1d(IML, E_NC_ND_ISDR_S)
-        E_NC_ND_ISDR_NS_spline = interp1d(IML, E_NC_ND_ISDR_NS)
-        E_NC_ND_ISDR_TOTAL_spline = interp1d(IML, E_NC_ND_ISDR_TOTAL)
-        E_NC_ND_PFA_TOTAL_spline = interp1d(IML, E_NC_ND_PFA_TOTAL)
-        E_NC_ND_S_spline = interp1d(IML, E_NC_ND_S)
-        E_NC_ND_NS_spline = interp1d(IML, E_NC_ND_NS)
-        E_NC_ND_spline = interp1d(IML, E_NC_ND)
-        E_NC_D_spline = interp1d(IML, E_NC_D)
-        E_C_spline = interp1d(IML, E_C)
-        E_LT_spline = interp1d(IML, E_LT)
-
         # Into a dictionary
         E_interpolation_functions = {}
         for key in losses.keys():

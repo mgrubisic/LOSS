@@ -133,6 +133,7 @@ class SLF:
                             
                             slf_temp = np.insert(df[d][key][i]["loss"], 0, 0)
                             interpolation_functions[d][key][int(i[-1])] = interp1d(edp_temp, slf_temp * factor)
+
                     # IDR-sensitive components
                     else:
                         # Loop for each direction, 1 and 2, x or y

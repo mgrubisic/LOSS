@@ -22,6 +22,7 @@ class Cost:
         self.include_demolition = include_demolition
         self.nonDirFactor = nonDirFactor
         self.nstories = nstories
+        self.NEGLIGIBLE = 1e-9
         
     def get_non_dir_nrha_results(self, nrha):
         """
@@ -64,16 +65,21 @@ class Cost:
             frag_calc = f.calc_p_edp_given_im(nrha, story, iml, iml_range)
             edp_theta = frag_calc['theta']
             edp_beta = frag_calc['beta']
+            if edp_beta < 0.1:
+                edp_beta = 0.1
             p_edp = stats.norm.pdf(np.log(self.idr / edp_theta) / edp_beta, loc=0, scale=1)
             p_edp = p_edp / sum(p_edp)
+
             # Apply interpolation
             cost_sd = None
             cost_nsd = None
             for edp in interpolation[direction_tag].keys():
                 if edp.lower() == "idr_s" or edp.lower() == "s" or edp.lower() == "psd_s":
                     cost_sd = sum(interpolation[direction_tag][edp][direction][story](self.idr / 100) * p_edp)
+                    cost_sd = 0 if cost_sd < 0 else cost_sd
                 elif edp.lower() == "idr_ns" or edp.lower() == "ns" or edp.lower() == "psd_ns":
                     cost_nsd = sum(interpolation[direction_tag][edp][direction][story](self.idr / 100) * p_edp)
+                    cost_nsd = 0 if cost_nsd < 0 else cost_nsd
 
             return cost_sd, cost_nsd
 
@@ -84,17 +90,21 @@ class Cost:
             frag_calc = f.calc_p_edp_given_im(nrha, story, iml, iml_range)
             edp_theta = frag_calc['theta']
             edp_beta = frag_calc['beta']
+            if edp_beta < 0.1:
+                edp_beta = 0.1
             p_edp = stats.norm.pdf(np.log(self.idr / edp_theta) / edp_beta, loc=0, scale=1)
             p_edp = p_edp / sum(p_edp)
-            
+
             # Apply interpolation
             cost_sd = None
             cost_nsd = None
             for edp in interpolation[direction_tag].keys():
                 if edp.lower() == "idr_s" or edp.lower() == "s" or edp.lower() == "psd_s":
                     cost_sd = sum(interpolation[direction_tag][edp][story](self.idr / 100) * p_edp)
+                    cost_sd = 0 if cost_sd < 0 else cost_sd
                 elif edp.lower() == "idr_ns" or edp.lower() == "ns" or edp.lower() == "psd_ns":
                     cost_nsd = sum(interpolation[direction_tag][edp][story](self.idr / 100) * p_edp)
+                    cost_nsd = 0 if cost_nsd < 0 else cost_nsd
 
             # Storing the already modified IDA results to be used for the PFA-sensitive non-directional components
             costs = [cost_sd, cost_nsd]
@@ -124,6 +134,8 @@ class Cost:
         if floor != 0 and floor != self.nstories:
             story_loss_ratio_acc_partial /= 2
         cost = story_loss_ratio_acc_partial
+        cost = 0 if cost < 0 else cost
+
         return cost
 
     def calc_losses(self, nrhaOutputs, ridr, iml_range, collapse=None, demolition=None, use_beta_mdl=.15, repl_cost=1.,
@@ -249,7 +261,7 @@ class Cost:
                     else:
                         # Drift-sensitive losses
                         for key in nrhaOutputs.keys():
-                            if key == "x":
+                            if key == "x" or key == 0:
                                 direction = "dir1"
                             else:
                                 direction = "dir2"
@@ -330,6 +342,9 @@ class Cost:
         :return cache: dict                 EAL bins, IML range and MAF for Visualization
         """
         if method == "Porter":
+            # Sometimes after PSHA, some values of MAFE will be zero, avoid it
+            l = np.array(l)
+            l[(l <= 0)] = self.NEGLIGIBLE
             # Initialize contributions of EAL
             eal_bins = np.array([])
             # Initialize midpoint generation on IML
@@ -341,11 +356,14 @@ class Cost:
                 im_midpoint = np.append(im_midpoint, iml[i] + dIM / 2)
                 # dMAFEdIM, logarithmic gradient divided by IML step
                 dLdIM = np.log(l[i+1] / l[i]) / dIM
-                # Loss ratio step
-                dMDF = mdf[i+1] - mdf[i]
-                # EAL contribution at each level of IML
-                eal_bins = np.append(eal_bins, (mdf[i] * l[i] * (1 - np.exp(dLdIM*dIM)) - dMDF/dIM*l[i] *
-                                                (np.exp(dLdIM*dIM)*(dIM - 1/dLdIM) + 1/dLdIM)))
+                if dLdIM != 0:
+                    # Loss ratio step
+                    dMDF = mdf[i+1] - mdf[i]
+                    # EAL contribution at each level of IML
+                    eal_bins = np.append(eal_bins, (mdf[i] * l[i] * (1 - np.exp(dLdIM*dIM)) - dMDF/dIM*l[i] *
+                                                    (np.exp(dLdIM*dIM)*(dIM - 1/dLdIM) + 1/dLdIM)))
+                else:
+                    eal_bins = np.append(eal_bins, 0.0)
             # EAL expressed in the units of total replacement cost
             eal = rc * (sum(eal_bins) + l[-1])
             # EAL ratio in % of the total building cost (rc)
