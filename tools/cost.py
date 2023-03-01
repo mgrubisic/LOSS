@@ -138,7 +138,7 @@ class Cost:
 
         return cost
 
-    def calc_losses(self, nrhaOutputs, ridr, iml_range, collapse=None, demolition=None, use_beta_mdl=.15, repl_cost=1.,
+    def calc_losses(self, nrhaOutputs, iml_range, collapse=None, demolition=None, use_beta_mdl=.15, repl_cost=1.,
                     flag3d=True, normalize=False):
         """
         Calculates expected losses based on provided storey-loss functions
@@ -197,23 +197,7 @@ class Cost:
             p_collapse = stats.norm.cdf(np.log(iml_ext / theta_col) / beta_col, loc=0, scale=1)
             loss_results['C'] = p_collapse
 
-        # Demolition losses given no collapse - P(D|NC,IM)
-        if demolition is None:
-            ls_median = None
-            ls_cov = None
-        else:
-            ls_median = demolition["median"]
-            ls_cov = demolition["cov"]
-
-        if self.include_demolition:
-            frag_calc = f.calc_demolition_fragility(ridr, iml_range, iml_ext, ls_median=ls_median, ls_cov=ls_cov)
-            theta_dem = frag_calc['theta']
-            beta_dem = frag_calc['beta']
-            p_demol = stats.norm.cdf(np.log(iml_ext / theta_dem) / beta_dem, loc=0, scale=1)
-            loss_results['D'] = p_demol
-
-        else:
-            loss_results['D'] = 0
+        loss_results['D'] = 0
 
         # Getting the SLFs
         slf = SLF(self.slf_filename, self.nstories, repl_cost=repl_cost, flag3d=flag3d, normalize=normalize)
